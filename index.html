@@ -9624,39 +9624,15 @@
         parent.add(me); return me;
     }
     function buildArm(side, skinM, sleeveM, cuffM) {
-        // a proper arm: jacket sleeve + cuff, wrist, rounded palm, 4 jointed fingers and a thumb
+        // simple blocky "toy" arm: a square sleeve and a mitten-block hand, no fingers
         const arm = new THREE.Group();
-        const X = (x) => x * side;
-        const sl = hm(arm, new THREE.CylinderGeometry(0.05, 0.064, 0.52, 16), sleeveM, 0, 0, 0.33); sl.rotation.x = Math.PI / 2;
-        for (let i = 0; i < 3; i++) { const f = hm(arm, new THREE.TorusGeometry(0.056 + i * 0.002, 0.006, 6, 18), sleeveM, 0, 0.002, 0.13 + i * 0.09); f.scale.set(1, 1, 0.8); }
-        const cf = hm(arm, new THREE.CylinderGeometry(0.054, 0.054, 0.045, 16), cuffM, 0, 0, 0.075); cf.rotation.x = Math.PI / 2;
-        const wr = hm(arm, new THREE.CylinderGeometry(0.031, 0.036, 0.06, 12), skinM, 0, 0, 0.035); wr.rotation.x = Math.PI / 2;
+        hm(arm, new THREE.BoxGeometry(0.11, 0.11, 0.44), sleeveM, 0, 0, 0.27);
+        hm(arm, new THREE.BoxGeometry(0.118, 0.118, 0.04), cuffM, 0, 0, 0.06);
         const hand = new THREE.Group(); arm.add(hand);
-        const palm = hm(hand, new THREE.SphereGeometry(0.05, 16, 12), skinM, 0, 0, -0.012); palm.scale.set(0.9, 0.44, 1.05);
-        const back = hm(hand, new THREE.SphereGeometry(0.045, 14, 10), skinM, 0, 0.008, -0.03); back.scale.set(0.95, 0.38, 0.6);
-        const fingers = [];
-        const segG = [new THREE.CylinderGeometry(0.0105, 0.0115, 0.034, 8), new THREE.CylinderGeometry(0.0098, 0.0105, 0.027, 8), new THREE.CylinderGeometry(0.009, 0.0098, 0.02, 8)];
-        const tipG = new THREE.SphereGeometry(0.0092, 8, 6), knG = new THREE.SphereGeometry(0.0118, 8, 6);
-        [-0.031, -0.011, 0.009, 0.028].forEach((fx, i) => {
-            const len = [0.92, 1.0, 0.97, 0.8][i];
-            const base = new THREE.Group(); base.position.set(X(fx), 0.004, -0.058 + Math.abs(fx) * 0.18); base.rotation.z = Math.PI; base.rotation.y = X(fx) * -1.6; hand.add(base);
-            hm(base, knG, skinM, 0, 0, 0);
-            const f = new THREE.Group(); base.add(f);
-            const s1 = hm(f, segG[0], skinM, 0, 0, -0.017 * len); s1.rotation.x = Math.PI / 2; s1.scale.y = len;
-            const k2 = new THREE.Group(); k2.position.z = -0.034 * len; f.add(k2);
-            const s2 = hm(k2, segG[1], skinM, 0, 0, -0.0135 * len); s2.rotation.x = Math.PI / 2; s2.scale.y = len;
-            const k3 = new THREE.Group(); k3.position.z = -0.027 * len; k2.add(k3);
-            const s3 = hm(k3, segG[2], skinM, 0, 0, -0.01 * len); s3.rotation.x = Math.PI / 2; s3.scale.y = len;
-            hm(k3, tipG, skinM, 0, 0, -0.02 * len);
-            fingers.push({ f: f, k2: k2, k3: k3 });
-        });
-        const th = new THREE.Group(); th.position.set(X(-0.042), 0.006, -0.02); th.rotation.set(0.3, X(-0.75), X(-0.5)); hand.add(th);
-        const thf = new THREE.Group(); thf.rotation.z = Math.PI; th.add(thf);
-        const t1 = hm(thf, new THREE.CylinderGeometry(0.0125, 0.014, 0.034, 8), skinM, 0, 0, -0.017); t1.rotation.x = Math.PI / 2;
-        const th2 = new THREE.Group(); th2.position.z = -0.034; thf.add(th2);
-        const t2 = hm(th2, new THREE.CylinderGeometry(0.011, 0.0125, 0.028, 8), skinM, 0, 0, -0.014); t2.rotation.x = Math.PI / 2;
-        hm(th2, new THREE.SphereGeometry(0.011, 8, 6), skinM, 0, 0, -0.028);
-        return { arm: arm, hand: hand, fingers: fingers, th: th, th2: th2 };
+        hm(hand, new THREE.BoxGeometry(0.1, 0.1, 0.1), skinM, 0, 0, -0.01);
+        const th = new THREE.Group(); hand.add(th);
+        const th2 = new THREE.Group(); th.add(th2);
+        return { arm: arm, hand: hand, fingers: [], th: th, th2: th2 };
     }
     function curl(A, amt, thumb) {
         A.fingers.forEach((f, i) => { const c = amt * (1 + i * 0.05); f.f.rotation.x = c * 0.9; f.k2.rotation.x = c * 1.1; f.k3.rotation.x = c * 0.8; });
@@ -9766,8 +9742,7 @@
         const g = new THREE.Group();
         H.scene.add(g);
         H.view = new THREE.Group(); g.add(H.view);
-        const skin = hl(0xd49a74, 0x140a05), sleeve = hl(0x2b303a, 0x040508), cuff = hl(0x1c1f26, 0x030304);
-        if (window.__hiMat) { skin.shininess = 18; skin.specular = new THREE.Color(0x2a1a14); sleeve.shininess = 4; cuff.shininess = 4; }
+        const skin = hl(0xf5c96b, 0x2a1c08), sleeve = hl(0x3d7be0, 0x0a1830), cuff = hl(0x2a5bb0, 0x081428);
         H.R = buildArm(1, skin, sleeve, cuff);
         H.L = buildArm(-1, skin, sleeve, cuff);
         H.view.add(H.R.arm); H.view.add(H.L.arm);
@@ -13361,7 +13336,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
     const NAME_A = ['Tater', 'Gravy', 'Nugget', 'Pickle', 'Spork', 'Waffle', 'Noodle', 'Biscuit', 'Muffin', 'Taco'];
     const NAME_B = ['Kid', 'Boss', 'Ninja', 'Runner', 'Hero', 'Gremlin', 'Legend', 'Goblin'];
     const COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7', '#f97316', '#ec4899', '#14b8a6', '#f5f5f4', '#1f2937'];
-    const SKINS = [0xf1c9a5, 0xe0ac7e, 0xb07a4f, 0x7a4b2b, 0xffe0bd];
+    const SKINS = [0xf5cd30, 0xf1c9a5, 0xe0ac7e, 0xb07a4f, 0x7a4b2b, 0xffe0bd];   // yellow = the classic blocky look
     const HATS = [
         { id: 'none', icon: '💇', name: 'Hair' }, { id: 'cap', icon: '🧢', name: 'Cap' }, { id: 'beanie', icon: '🧶', name: 'Beanie' },
         { id: 'chef', icon: '👨‍🍳', name: 'Chef' }, { id: 'crown', icon: '👑', name: 'Crown' }, { id: 'headphones', icon: '🎧', name: 'Headphones' },
@@ -13369,7 +13344,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
     ];
     const prof = Object.assign({
         name: NAME_A[Math.floor(Math.random() * NAME_A.length)] + NAME_B[Math.floor(Math.random() * NAME_B.length)] + Math.floor(Math.random() * 90 + 10),
-        color: COLORS[Math.floor(Math.random() * 6)], hat: 'cap', skin: 0
+        color: '#3b82f6', hat: 'none', skin: 0
     }, LS.get('doors_mp_profile', {}));
     function saveProf() { LS.set('doors_mp_profile', prof); }
 
@@ -13684,6 +13659,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
         h += '<h3>Your look</h3><div class="mp-row"><input type="text" id="mp-name" maxlength="16" value="' + esc(prof.name) + '" style="flex:1"></div>';
         h += '<div class="mp-row" style="margin-top:6px">' + COLORS.map((c) => '<div class="mp-sw' + (prof.color === c ? ' on' : '') + '" data-c="' + c + '" style="background:' + c + '"></div>').join('') + '</div>';
         h += '<div class="mp-row" style="margin-top:6px">' + HATS.map((x) => '<span class="mp-hat' + (prof.hat === x.id ? ' on' : '') + '" data-h="' + x.id + '" title="' + x.name + '">' + x.icon + '</span>').join('') + '</div>';
+        h += '<div class="mp-row" style="margin-top:6px"><button class="mp-b" id="mp-noob">🟨 CLASSIC NOOB LOOK</button></div>';
         h += '<div class="mp-row" style="margin-top:6px">' + SKINS.map((c, i) => '<div class="mp-sw' + (prof.skin === i ? ' on' : '') + '" data-s="' + i + '" style="background:#' + c.toString(16).padStart(6, '0') + '"></div>').join('') + '</div>';
         if (!M.code) {
             if (!M.net) {
@@ -13726,6 +13702,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
         panel.querySelectorAll('[data-h]').forEach((el) => { el.onclick = () => { prof.hat = el.dataset.h; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); }; });
         panel.querySelectorAll('[data-s]').forEach((el) => { el.onclick = () => { prof.skin = +el.dataset.s; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); }; });
         panel.querySelectorAll('[data-d]').forEach((el) => { el.onclick = () => { if (isHost()) M.net.update(base() + '/meta', { diff: el.dataset.d }); }; });
+        on('mp-noob', () => { prof.color = '#3b82f6'; prof.hat = 'none'; prof.skin = 0; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); });
         on('mp-online', () => connect('fire'));
         on('mp-local', () => connect('local'));
         on('mp-cfgsave', () => {
@@ -14236,16 +14213,19 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
         }
         return new THREE.CanvasTexture(c);
     }
-    function buildHat(R, info, head) {
+    function buildHat(R, info, head, noHair) {
         const hat = info.hat || 'none', col = new THREE.Color(info.color || '#3b82f6');
-        const hairCol = [0x3b2414, 0x2a1a10, 0x1a1008, 0x120a05, 0x8a5a2a][info.skin || 0];
+        const hairCol = [0x3b2414, 0x3b2414, 0x2a1a10, 0x1a1008, 0x120a05, 0x8a5a2a][info.skin || 0] || 0x3b2414;
         const hair = lam(hairCol, 0x080402);
         const dark = lam(col.clone().multiplyScalar(0.55));
         const main = lam(col, col.clone().multiplyScalar(0.08));
-        // hair under every hat
-        const cap = mesh(head, gSph(0.178, 14, 10), hair, 0, 0.18, -0.012); cap.scale.set(1.02, 0.78, 1.04);
-        const fringe = mesh(head, gBox(0.26, 0.05, 0.06), hair, 0, 0.27, 0.13); fringe.rotation.x = -0.4;
+        // hair under every hat (blocky heads are bald)
+        if (!noHair) {
+            const cap = mesh(head, gSph(0.178, 14, 10), hair, 0, 0.18, -0.012); cap.scale.set(1.02, 0.78, 1.04);
+            const fringe = mesh(head, gBox(0.26, 0.05, 0.06), hair, 0, 0.27, 0.13); fringe.rotation.x = -0.4;
+        }
         if (hat === 'none') {
+            if (noHair) return;
             for (let i = 0; i < 5; i++) { const s = mesh(head, gSph(0.06, 8, 6), hair, -0.1 + i * 0.05, 0.33, -0.02 + (i % 2) * 0.04); s.scale.set(1, 0.7, 1); }
         } else if (hat === 'cap') {
             mesh(head, gCyl(0.182, 0.185, 0.1, 16), main, 0, 0.29, 0);
@@ -14318,52 +14298,31 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
         const skin = lam(skinC, new THREE.Color(skinC).multiplyScalar(0.1)), pants = lam(0x273248, 0x05070c), shoe = lam(0x1d1d22), sole = lam(0xf2f2f2, 0x222222);
         const pack = lam(new THREE.Color(col).offsetHSL(0.5, -0.1, -0.15), 0x050505);
         const black = new THREE.MeshBasicMaterial({ color: 0x15100c }), white = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        const R = { t: Math.random() * 10, ph: 0, blink: 2 + Math.random() * 3, emoteT: 0, emote: '', hurtT: 0, step: 0 };
-        R.hips = joint(body, 0, 0.93, 0);
-        mesh(R.hips, gBox(0.33, 0.17, 0.21), pants, 0, 0, 0);
-        mesh(R.hips, gBox(0.35, 0.05, 0.23), lam(0x3a2a1a), 0, 0.075, 0);   // belt
-        R.spine = joint(R.hips, 0, 0.07, 0);
-        const torso = mesh(R.spine, gCyl(0.2, 0.175, 0.48, 14), shirt, 0, 0.25, 0); torso.scale.z = 0.7;
-        const shoulders = mesh(R.spine, gSph(0.205, 14, 8), shirt, 0, 0.47, 0); shoulders.scale.set(1.08, 0.42, 0.72);
-        mesh(R.spine, gBox(0.24, 0.09, 0.02), shirtD, 0, 0.13, 0.13);                       // hoodie pocket
-        const hood = mesh(R.spine, gSph(0.13, 12, 8), shirtD, 0, 0.5, -0.12); hood.scale.set(1.3, 0.7, 0.8);
-        [-0.04, 0.04].forEach((x) => mesh(R.spine, gCyl(0.008, 0.008, 0.14, 4), lam(0xf5f5f5), x, 0.38, 0.14));   // drawstrings
-        mesh(R.spine, gBox(0.27, 0.31, 0.12), pack, 0, 0.28, -0.19);                         // backpack
-        mesh(R.spine, gBox(0.2, 0.1, 0.03), lam(new THREE.Color(col).offsetHSL(0.5, -0.2, -0.3)), 0, 0.2, -0.26);
-        [-0.09, 0.09].forEach((x) => mesh(R.spine, gBox(0.035, 0.36, 0.02), pack, x, 0.3, 0.13));
-        R.neck = joint(R.spine, 0, 0.56, 0);
-        mesh(R.neck, gCyl(0.06, 0.065, 0.08, 10), skin, 0, 0.02, 0);
-        R.head = joint(R.neck, 0, 0.06, 0);
-        const head = mesh(R.head, gSph(0.17, 18, 14), skin, 0, 0.15, 0); head.scale.set(1, 1.07, 1);
-        [-1, 1].forEach((s) => { const e = mesh(R.head, gSph(0.04, 8, 6), skin, s * 0.17, 0.14, 0); e.scale.set(0.5, 1, 0.8); });
+        // classic blocky "noob" avatar: yellow block head + arms, shirt-coloured torso, green legs, stiff block limbs
+        const U = 0.37;   // one "stud"
+        const legs = lam(0x7cb342, 0x0c1406);
+        const R = { t: Math.random() * 10, ph: 0, blink: 2 + Math.random() * 3, emoteT: 0, emote: '', hurtT: 0, step: 0, hipY: 2 * U, blocky: true };
+        R.hips = joint(body, 0, R.hipY, 0);
+        R.spine = joint(R.hips, 0, 0, 0);
+        mesh(R.spine, gBox(2 * U, 2 * U, U), shirt, 0, U, 0);                                   // torso
+        R.neck = joint(R.spine, 0, 2 * U, 0);
+        R.head = joint(R.neck, 0, 0, 0);
+        mesh(R.head, gCyl(0.6 * U, 0.6 * U, 1.15 * U, 20), skin, 0, 0.62 * U, 0);              // rounded block head
+        const capT = mesh(R.head, gSph(0.6 * U, 20, 8), skin, 0, 1.15 * U, 0); capT.scale.y = 0.22;
+        const capB = mesh(R.head, gSph(0.6 * U, 20, 8), skin, 0, 0.08 * U, 0); capB.scale.y = 0.2;
         R.eyes = [];
-        [-1, 1].forEach((s) => {
-            const w = mesh(R.head, gSph(0.036, 10, 8), white, s * 0.062, 0.17, 0.142); w.scale.set(1, 1.15, 0.5);
-            const p = mesh(R.head, gSph(0.021, 8, 6), black, s * 0.062, 0.168, 0.158); p.scale.z = 0.5;
-            const hl = mesh(R.head, gSph(0.007, 6, 4), white, s * 0.062 + 0.008, 0.177, 0.168);
-            R.eyes.push(w, p, hl);
-            const br = mesh(R.head, gBox(0.055, 0.012, 0.01), black, s * 0.062, 0.222, 0.155); br.rotation.z = -s * 0.12;
-            const ch = mesh(R.head, gSph(0.025, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff8a8a, transparent: true, opacity: 0.35 }), s * 0.1, 0.11, 0.135); ch.scale.z = 0.3;
-        });
-        mesh(R.head, gSph(0.02, 8, 6), skin, 0, 0.135, 0.17);
-        R.mouth = mesh(R.head, new THREE.TorusGeometry(0.032, 0.008, 4, 12, Math.PI), black, 0, 0.1, 0.158); R.mouth.rotation.z = Math.PI;
-        buildHat(R, info, R.head);
-        [-1, 1].forEach((s) => {
-            const sh = joint(R.spine, s * 0.25, 0.46, 0); R['sh' + s] = sh;
-            mesh(sh, gSph(0.07, 10, 8), shirt, 0, 0, 0);
-            mesh(sh, gCyl(0.064, 0.056, 0.27, 10), shirt, 0, -0.14, 0);
-            const el = joint(sh, 0, -0.27, 0); R['el' + s] = el;
-            mesh(el, gCyl(0.055, 0.05, 0.22, 10), shirt, 0, -0.11, 0);
-            mesh(el, gCyl(0.056, 0.056, 0.04, 10), shirtD, 0, -0.21, 0);
-            const hand = joint(el, 0, -0.26, 0); R['hand' + s] = hand;
-            const hm = mesh(hand, gSph(0.052, 10, 8), skin, 0, 0, 0); hm.scale.set(0.9, 1.1, 0.8);
-            const hip = joint(R.hips, s * 0.095, -0.06, 0); R['hip' + s] = hip;
-            mesh(hip, gCyl(0.08, 0.07, 0.4, 10), pants, 0, -0.2, 0);
-            const kn = joint(hip, 0, -0.4, 0); R['kn' + s] = kn;
-            mesh(kn, gCyl(0.07, 0.06, 0.37, 10), pants, 0, -0.18, 0);
-            mesh(kn, gBox(0.12, 0.08, 0.23), shoe, 0, -0.4, 0.04);
-            mesh(kn, gBox(0.125, 0.025, 0.24), sole, 0, -0.445, 0.04);
-            mesh(kn, gBox(0.09, 0.01, 0.08), sole, 0, -0.36, 0.11);
+        [-1, 1].forEach((sd) => { const e = mesh(R.head, gSph(0.065 * U * 1.4, 10, 8), black, sd * 0.2 * U, 0.78 * U, 0.58 * U); e.scale.set(0.8, 1.25, 0.35); R.eyes.push(e, e, e); });
+        R.mouth = mesh(R.head, new THREE.TorusGeometry(0.24 * U, 0.035 * U, 4, 16, Math.PI), black, 0, 0.5 * U, 0.585 * U); R.mouth.rotation.z = Math.PI;
+        const hatHold = joint(R.head, 0, 0.6 * U - 0.15 * 1.35, 0); hatHold.scale.setScalar(1.35);
+        buildHat(R, info, hatHold, true);
+        [-1, 1].forEach((sd) => {
+            const sh = joint(R.spine, sd * 1.5 * U, 1.75 * U, 0); R['sh' + sd] = sh;          // shoulder pivot
+            mesh(sh, gBox(U, 2 * U, U), skin, 0, -0.75 * U, 0);                               // whole arm is one block
+            const el = joint(sh, 0, -1.7 * U, 0); R['el' + sd] = el;
+            const hand = joint(el, 0, 0, 0.1 * U); R['hand' + sd] = hand;
+            const hip = joint(R.hips, sd * 0.5 * U, 0, 0); R['hip' + sd] = hip;                // hip pivot
+            mesh(hip, gBox(U, 2 * U, U), legs, 0, -U, 0);                                      // whole leg is one block
+            const kn = joint(hip, 0, -U, 0); R['kn' + sd] = kn;
         });
         // ground shadow
         const sh = new THREE.Mesh(new THREE.CircleGeometry(0.36, 18), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }));
@@ -14411,7 +14370,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
                     tg['sh-1.x'] = sn * 0.75 * a; tg['sh1.x'] = -sn * 0.75 * a;
                     tg['el-1.x'] = -0.25 - a * 0.6; tg['el1.x'] = -0.25 - a * 0.6;
                     tg['spine.x'] = 0.08 + a * 0.18; tg['spine.y'] = sn * 0.12 * a;
-                    tg['hips.py'] = (crouch ? 0.6 : 0.93) + Math.abs(cs) * 0.05 * a;
+                    tg['hips.py'] = (crouch ? 0.6 : 0.93) * (R.hipY || 0.93) / 0.93 + Math.abs(cs) * 0.05 * a;
                     // footsteps you can hear
                     R.step += dt * spd;
                     if (R.step > (s.sprint ? 2.6 : 2.0) && camPos) {
@@ -14423,11 +14382,11 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
                     const br = Math.sin(R.t * 1.8);
                     tg['hip-1.x'] = 0; tg['hip1.x'] = 0; tg['kn-1.x'] = 0.04; tg['kn1.x'] = 0.04;
                     tg['sh-1.x'] = br * 0.04; tg['sh1.x'] = -br * 0.04; tg['el-1.x'] = -0.15; tg['el1.x'] = -0.15;
-                    tg['spine.x'] = 0.02 + br * 0.015; tg['spine.y'] = 0; tg['hips.py'] = 0.93 + br * 0.006;
+                    tg['spine.x'] = 0.02 + br * 0.015; tg['spine.y'] = 0; tg['hips.py'] = (R.hipY || 0.93) + br * 0.006;
                 }
                 tg['sh-1.z'] = -0.08; tg['sh1.z'] = 0.08;
                 if (crouch) {
-                    tg['hips.py'] = moving ? tg['hips.py'] : 0.6;
+                    tg['hips.py'] = moving ? tg['hips.py'] : 0.6 * (R.hipY || 0.93) / 0.93;
                     tg['hip-1.x'] = (tg['hip-1.x'] || 0) - 1.0; tg['hip1.x'] = (tg['hip1.x'] || 0) - 1.0;
                     tg['kn-1.x'] = (tg['kn-1.x'] || 0) + 1.5; tg['kn1.x'] = (tg['kn1.x'] || 0) + 1.5;
                     tg['spine.x'] = 0.42;
@@ -14442,6 +14401,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
                 }
                 if (!(R.emoteT > 0)) tg['el-1.z'] = 0;
                 if (R.hurtT > 0) { R.hurtT -= dt; tg['spine.x'] = -0.25; tg['neck.x'] = 0.3; }
+                if (R.blocky) { tg['kn-1.x'] = 0; tg['kn1.x'] = 0; tg['spine.x'] = (tg['spine.x'] || 0) * 0.35; tg['spine.y'] = (tg['spine.y'] || 0) * 0.4; if (crouch) { tg['hip-1.x'] = (tg['hip-1.x'] || 0) * 0.5; tg['hip1.x'] = (tg['hip1.x'] || 0) * 0.5; } }
                 const k = Math.min(1, dt * 14);
                 for (const key in tg) {
                     const [n, ax] = key.split('.');
