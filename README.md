@@ -120,7 +120,7 @@ Open **DOORS → 👥 PLAY WITH FRIENDS**, paste the whole `const firebaseConfig
 1. Everyone opens the game (the same file or link) → **DOORS** → **👥 PLAY WITH FRIENDS** → **🌐 ONLINE**.
 2. One person presses **✨ CREATE LOBBY** and shares the 5-letter **code**.
 3. Everyone else types the code and presses **JOIN**.
-4. Pick a name, a colour, a hat and a skin tone. Your character stands in the hotel lobby with everyone else.
+4. Pick a name, a shirt colour, a hat and a skin tone (or press **🟨 CLASSIC NOOB LOOK**). Everyone is a blocky noob-style character, and your character stands in the hotel lobby with everyone else.
 5. Friends press **✔ READY**. The host picks the difficulty and modifiers, then presses **▶ START RUN**.
 
 ### Sharing with friends
@@ -162,7 +162,7 @@ Changing between LOW/MEDIUM and HIGH takes effect the next time you open the gam
 ### What changed
 - **Lighting:** lamps light up the floor and walls around them, corners stay dark, furniture has soft shadows underneath, and ceiling lamps cast faint light cones.
 - **Post-processing:** lights glow (bloom), the colors are less "cartoon orange", and there's a vignette and subtle film grain. When you die, the colors drain out.
-- **First-person arms:** a dark jacket sleeve and a real hand with fingers that wrap around what you're holding, instead of the old blocky toy arm.
+- **First-person arms:** still the classic blocky toy arm (by request).
 - **UI:** a new menu and DOORS HUD with cleaner fonts, slim health bar, glass hotbar and movie-style subtitles.
 - **Sound:**
   - Everything goes through a mixer (compressor + limiter) and a reverb, so sounds feel like they're in a real place.
