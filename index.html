@@ -469,7 +469,7 @@
                             <button id="lvl-backrooms" class="px-2.5 py-2.5 rounded-xl text-xs font-extrabold bg-neutral-900 text-yellow-200 hover:text-white border border-yellow-600/70 transition cursor-pointer">🟨 2. BACKROOMS</button>
                             <button id="lvl-kitchen" class="px-2.5 py-2.5 rounded-xl text-xs font-extrabold bg-neutral-900 text-cyan-200 hover:text-white border border-cyan-600/70 transition cursor-pointer">🔪 3. BOILER KITCHEN</button>
                             <button id="lvl-alex1000" class="px-2.5 py-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-lime-950 to-red-950 text-lime-300 hover:text-white border-2 border-lime-400/80 transition cursor-pointer">🍲 4. 1000 ALEXES!</button>
-                            <button id="lvl-doors" class="col-span-2 px-2.5 py-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-amber-950 to-stone-900 text-amber-300 hover:text-white border-2 border-amber-500/80 transition cursor-pointer">🚪 5. DOORS — 50 ROOMS (Rush, Ambush, Alex &amp; Mrs. C!)</button>
+                            <button id="lvl-doors" class="col-span-2 px-2.5 py-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-amber-950 to-stone-900 text-amber-300 hover:text-white border-2 border-amber-500/80 transition cursor-pointer">🚪 5. DOORS — 100 ROOMS + 👥 MULTIPLAYER (Rush, Alex &amp; Mrs. C!)</button>
                         </div>
                     </div>
 
@@ -638,7 +638,7 @@
                     lvlDesc.textContent = 'Level 3: Boiler Kitchen Maze — Dark Industrial Corridors, 4 Lunch Monitors & Fast Chaos!';
                     startBtn.textContent = 'START LEVEL 3: BOILER KITCHEN';
                 } else if (selectedLevel === 'DOORS') {
-                    lvlDesc.textContent = 'DOORS Mode: 50 rooms. Rush, Ambush, Screech, Eyes, Halt, Hide — plus ALEX (chase) and MRS. C (Library finale). Open Door 51!';
+                    lvlDesc.textContent = 'DOORS Mode: 100 rooms, solo or with friends online. Rush, Ambush, Screech, Eyes, Halt, the Janitor — plus ALEX (chases) and MRS. C (Library + Room 100). Escape through Door 101!';
                     startBtn.textContent = 'ENTER THE HOTEL: DOORS MODE';
                 } else {
                     lvlDesc.textContent = 'Level 4: 1,000 Alex Cafeteria Apocalypse — Plow through 1,000 Alexes in the Lunchmobile!';
@@ -4992,6 +4992,47 @@
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const pad3 = (n) => String(n).padStart(3, '0');
 
+    // ---------- seeded generation (same seed = same hotel, used by multiplayer + seeded runs) ----------
+    const REAL_RANDOM = Math.random;
+    function mulberry32(a) {
+        return function () {
+            a |= 0; a = (a + 0x6D2B79F5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+    function hashStr(s) {
+        s = String(s);
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+        return h >>> 0;
+    }
+    function randomSeed() {
+        const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let s = '';
+        for (let i = 0; i < 6; i++) s += A[Math.floor(REAL_RANDOM() * A.length)];
+        return s;
+    }
+    // run fn with Math.random replaced by a PRNG seeded from (run seed, key)
+    function withSeed(key, fn) {
+        if (!S || S.seed === undefined || S.seed === null) return fn();
+        const prev = Math.random;
+        Math.random = mulberry32(hashStr(S.seed + ':' + key));
+        try { return fn(); } finally { Math.random = prev; }
+    }
+
+    // ---------- multiplayer hooks (filled in by the doors-mp script) ----------
+    const MPH = window.__mpHooks = window.__mpHooks || {};
+    function mpOn() { try { return !!(MPH.on && MPH.on()); } catch (e) { return false; } }
+    function mpAuth() { if (!mpOn()) return true; try { return !!(MPH.isAuth && MPH.isAuth()); } catch (e) { return true; } }
+    function mpEmit(type, data) { if (!mpOn() || MPH.applying) return; try { MPH.emit(type, data || {}); } catch (e) { console.error('mp emit', e); } }
+    function mpPlayers() {
+        if (mpOn() && MPH.players) { try { return MPH.players(); } catch (e) { /* ignore */ } }
+        const P = S.P;
+        return P ? [{ id: 'me', me: true, x: P.x, z: P.z, room: S.cur, dead: S.dead, hidden: !!P.hidden, noise: Math.max(P.noiseShown || 0, P.noiseKick || 0) }] : [];
+    }
+
     const geoCache = {};
     function geo(w, h, d) {
         w = Math.round(w * 40) / 40 || 0.025; h = Math.round(h * 40) / 40 || 0.025; d = Math.round(d * 40) / 40 || 0.025;
@@ -5111,6 +5152,9 @@
     #dr-flash{position:absolute;inset:0;background:radial-gradient(circle,rgba(220,20,20,0) 30%,rgba(220,20,20,.85) 100%);opacity:0;transition:opacity .25s}
     #dr-eyes{position:absolute;inset:0;background:radial-gradient(circle,rgba(150,60,220,0) 25%,rgba(130,30,200,.8) 100%);opacity:0;transition:opacity .2s}
     #dr-hide{position:absolute;inset:0;display:none;background:repeating-linear-gradient(90deg,rgba(0,0,0,.97) 0 9%,rgba(0,0,0,.35) 9% 10.5%)}
+    #dr-hide.locker{background:linear-gradient(180deg,rgba(0,0,0,.97) 0 34%,transparent 34% 56%,rgba(0,0,0,.97) 56%),repeating-linear-gradient(0deg,rgba(0,0,0,.95) 0 3.2%,rgba(20,30,40,.35) 3.2% 4.6%)}
+    #dr-gray{position:absolute;inset:0;pointer-events:none;background:rgba(30,32,36,.12);backdrop-filter:grayscale(1) contrast(1.15);-webkit-backdrop-filter:grayscale(1) contrast(1.15);opacity:0;transition:opacity 1.2s}
+    #dr-intro,#dr-end,#dr-pause,#dr-pad{z-index:10}
     #dr-halt{position:absolute;top:30%;width:100%;text-align:center;font-size:46px;font-weight:bold;color:#bae6fd;letter-spacing:6px;text-shadow:0 0 24px #38bdf8;display:none}
     #dr-noise{position:absolute;left:18px;bottom:20px;width:190px;display:none;font-size:12px}
     #dr-code{position:absolute;left:18px;bottom:78px;font-size:18px;letter-spacing:5px;color:#fde68a;display:none;text-shadow:0 0 8px #000}
@@ -5124,13 +5168,17 @@
     #dr-padin{display:flex;gap:8px;justify-content:center;margin:14px 0}
     #dr-padin input{width:44px;height:56px;text-align:center;font-size:30px;font-weight:bold;background:#0f0a04;color:#fde68a;border:2px solid #b45309;border-radius:8px;font-family:inherit}
     #dr-tips{font-size:13px;text-align:left;margin-top:8px;line-height:1.5}
+    #dr-seedrow{margin-top:10px;font-size:13px}
+    #dr-seedrow input{width:130px;padding:4px 8px;border-radius:8px;border:2px solid #b45309;background:#0f0a04;color:#fde68a;font-family:monospace;font-size:14px;text-transform:uppercase;pointer-events:auto}
+    .dr-mini{pointer-events:auto;cursor:pointer;padding:4px 9px;border-radius:8px;border:1px solid #b45309;background:#3a1d08;color:#fde68a;font-family:inherit;font-size:12px}
+    .dr-mini:hover{background:#78350f}
     `;
     document.head.appendChild(css);
 
     const root = document.createElement('div');
     root.id = 'dr-root';
     root.innerHTML = `
-      <div id="dr-hide"></div><div id="dr-dark"></div>
+      <div id="dr-hide"></div><div id="dr-dark"></div><div id="dr-gray"></div>
       <div id="dr-flash"></div><div id="dr-eyes"></div>
       <div id="dr-room"><div class="n">ROOM 000</div><div class="t">The Lobby</div></div>
       <div id="dr-hp"><div style="font-size:12px;letter-spacing:2px">HEALTH</div><div class="dr-bar"><div id="dr-hpbar" style="width:100%;background:#16a34a"></div></div></div>
@@ -5158,9 +5206,12 @@
           😁 <b>Giggle</b> hangs from dark ceilings: crouch under it or shine a light. 🚪 A side door with the wrong number is <b>Dupe</b>. 🦷 Watch the floor for <b>Snares</b>.<br>
           📚 <b>Library:</b> read the note on the desk + 5 glowing books for the code. Throw 📕 books to distract Mrs. C. If she stops at your wardrobe, press <b>A / D</b> with the heartbeats.<br>
           🏃 <b>Chase:</b> follow the blue orbs, avoid the slime dead-end, hold <b>Shift</b> to slide under beams.<br>
-          🥤 Vending machines take 🪙 15. ✨ A <b>Guiding Light</b> revives you once. Earn 🔘 <b>Knobs</b> each run to spend before the next.
+          🥤 Vending machines take 🪙 15. ✨ A <b>Guiding Light</b> revives you once. Earn 🔘 <b>Knobs</b> each run to spend before the next.<br>
+          🧹 <b>NEW:</b> stay in one room too long and <b>the Janitor</b> comes to mop you up. 🗄️ Hide in <b>lockers</b> too.
         </div>
-        <button class="dr-btn" id="dr-go">ENTER THE HOTEL</button><button class="dr-btn" id="dr-quit0">BACK</button></div></div>
+        <div id="dr-seedrow">🎲 <b>Seed</b> <input id="dr-seed" maxlength="16" placeholder="random" spellcheck="false"> <button class="dr-mini" id="dr-daily">📅 Daily run</button> <button class="dr-mini" id="dr-rnd">🔀</button>
+          <div style="font-size:11px;opacity:.65;margin-top:3px">Same seed = same hotel. Share a seed with friends and race for the best time!</div></div>
+        <button class="dr-btn" id="dr-go">ENTER THE HOTEL</button><button class="dr-btn" id="dr-mpbtn" style="background:#1e3a8a;border-color:#93c5fd">👥 PLAY WITH FRIENDS</button><button class="dr-btn" id="dr-quit0">BACK</button></div></div>
       <div id="dr-end"><div class="dr-card"><h2 id="dr-endt">YOU DIED</h2><p id="dr-endl" style="font-style:italic"></p><p id="dr-endh"></p><p id="dr-ends"></p>
         <button class="dr-btn" id="dr-retry">↻ TRY AGAIN</button><button class="dr-btn" id="dr-quit2">🏠 MENU</button></div></div>
     `;
@@ -5189,9 +5240,9 @@
     // ============================================================
     // STATE
     // ============================================================
-    const CH1 = rint(30, 33);          // Seek chases: [start room, length, cutscene/pattern set]
+    let CH1 = rint(30, 33);            // Seek chases: [start room, length, cutscene/pattern set] (re-rolled from the seed every run)
     const CH2 = 43;
-    const CH3 = rint(62, 66);
+    let CH3 = rint(62, 66);
     const CH4 = 86;
     const CHASES = [[CH1, 6, 1], [CH2, 5, 2], [CH3, 6, 2], [CH4, 5, 2]];
     function chaseAt(n) { for (const c of CHASES) if (n >= c[0] && n <= c[0] + c[1]) return c; return null; }
@@ -5202,8 +5253,10 @@
         P: null, inv: [], sel: 0, gold: 0, battery: 100, lightOn: false,
         flicker: 0, ents: [], anims: [], achv: {}, rushFree: 0,
         library: null, chase: null, hideCount: 0, subT: 0, achvT: 0,
-        diff: 'NORMAL', dmgMult: 1, bag: { maxSlots: 8 }, lastDeathBy: ''
+        diff: 'NORMAL', dmgMult: 1, bag: { maxSlots: 8 }, lastDeathBy: '',
+        seed: null, mp: false, stats: { rushes: 0, hides: 0, closeCalls: 0, items: 0, doors: 0, gold: 0 }
     };
+    let RUN_OPTS = {};         // { seed, diff, mp } for the current run (set by startDoors)
     let fxLight = null, lightPool = [], flash = null, lighter = null, spot = null, spotTarget = null;
     let saved = null;          // main-scene values to restore
     const dk = { w: 0, a: 0, s: 0, d: 0, shift: 0, ctrl: 0 };
@@ -5277,6 +5330,22 @@
         const spot = { kind: 'wardrobe', x: r.x, z: r.z, face: face, camY: 1.55, exitX: r.x + face * 1.15, exitZ: r.z, yaw: face > 0 ? -Math.PI / 2 : Math.PI / 2, room: room };
         room.hides.push(spot);
         addInter(room, { kind: 'hide', spot: spot, x: r.x + face * 0.7, y: 1.4, z: r.z, label: 'Hide in wardrobe', cone: 0.82, reach: 2.6 });
+        return spot;
+    }
+    function addLocker(room) {
+        const r = fit(room, 0.8, 0.8);
+        if (!r) return null;
+        const face = r.x < 0 ? 1 : -1;
+        const col = pick([0x41607a, 0x5a6a4a, 0x7a3a3a, 0x55555f]);
+        box(room, 0.8, 2.5, 0.8, r.x, 0, r.z, col, { collide: true });
+        box(room, 0.05, 2.3, 0.72, r.x + face * 0.41, 0.1, r.z, col);
+        for (let i = 0; i < 4; i++) box(room, 0.06, 0.04, 0.46, r.x + face * 0.44, 1.75 + i * 0.1, r.z, 0x1a1a1f);   // vent slats
+        box(room, 0.07, 0.24, 0.05, r.x + face * 0.45, 1.2, r.z + 0.26, 0xc0c0c8);
+        const tag = labelPlane(String(rint(100, 499)), 0.3, 0.14, 'bold 60px Arial', '#111', '#e5e5e5', 128, 60);
+        tag.position.set(r.x + face * 0.445, 2.2, r.z); tag.rotation.y = face > 0 ? Math.PI / 2 : -Math.PI / 2; room.group.add(tag);
+        const spot = { kind: 'locker', x: r.x, z: r.z, face: face, camY: 1.62, exitX: r.x + face * 1.0, exitZ: r.z, yaw: face > 0 ? -Math.PI / 2 : Math.PI / 2, room: room };
+        room.hides.push(spot);
+        addInter(room, { kind: 'hide', spot: spot, x: r.x + face * 0.6, y: 1.4, z: r.z, label: 'Hide in locker', cone: 0.82, reach: 2.5 });
         return spot;
     }
     function addBed(room) {
@@ -5510,7 +5579,9 @@
         { name: 'Mystery Meat Storage', crates: [3, 5], ward: [1, 1], dress: [1, 1], chest: [0, 1] },
         { name: 'Detention Lounge', couch: [1, 2], ward: [1, 1], dress: [1, 1], tables: [1, 1], plants: [1, 2] },
         { name: 'Sloppy Joe Pantry', crates: [1, 2], dress: [2, 2], ward: [1, 1], tables: [1, 1], chest: [0, 1] },
-        { name: 'Lost & Found', beds: [0, 1], ward: [1, 2], dress: [1, 2], crates: [1, 2], chest: [0, 1] }
+        { name: 'Lost & Found', beds: [0, 1], ward: [1, 2], dress: [1, 2], crates: [1, 2], chest: [0, 1] },
+        { name: 'Staff Locker Room', lockers: [3, 5], dress: [1, 1], tables: [0, 1], crates: [0, 1] },
+        { name: 'Gym Storage', lockers: [2, 3], crates: [2, 3], dress: [1, 1], chest: [0, 1] }
     ];
     function cnt(r) { return r ? rint(r[0], r[1]) : 0; }
     function buildNormal(room) {
@@ -5521,6 +5592,7 @@
         for (let i = 0; i < nLamp; i++) addLamp(room, rnd(-1.5, 1.5), room.z0 - (i + 0.7) * room.D / (nLamp + 0.3));
         for (let i = 0; i < cnt(th.beds); i++) addBed(room);
         for (let i = 0; i < cnt(th.ward); i++) addWardrobe(room);
+        for (let i = 0; i < cnt(th.lockers); i++) addLocker(room);
         if (th.bigTable) addTable(room, true);
         for (let i = 0; i < cnt(th.dress); i++) addDresser(room);
         for (let i = 0; i < cnt(th.tables); i++) addTable(room, false);
@@ -6138,14 +6210,16 @@
     }
 
     // ---------- RUSH / AMBUSH ----------
-    function startRush(kind, room, tutorial) {
+    function startRush(kind, room, tutorial, passes) {
         const amb = kind === 'ambush';
         ensureRooms(room.n + 2);
         const last = S.rooms[Math.min(TOTAL_ROOMS, room.n + 2)] || room;
         const e = {
-            type: kind, phase: 'warn', t: amb ? 4.8 : 5.4, snd: 0, passes: amb ? rint(DF().amb[0], DF().amb[1]) : 1, pass: 0, dir: -1,
+            type: kind, phase: 'warn', t: amb ? 4.8 : 5.4, snd: 0, passes: passes || (amb ? rint(DF().amb[0], DF().amb[1]) : 1), pass: 0, dir: -1,
             z: 0, hi: room.z0 + 60, lo: last.z1 - 30, hitPass: -1, mesh: makeRush(amb)
         };
+        mpEmit('rush', { n: room.n, k: kind, ps: e.passes, tut: tutorial ? 1 : 0 });
+        S.stats.rushes++;
         e.mesh.visible = false;
         S.root.add(e.mesh);
         S.ents.push(e);
@@ -6258,6 +6332,10 @@
 
     // ---------- EYES (the stare-and-hurt entity) ----------
     function startEyes(room) {
+        mpEmit('eyes', { n: room.n });
+        withSeed('eyes' + room.n, () => startEyesInner(room));
+    }
+    function startEyesInner(room) {
         const g = new THREE.Group();
         const white = basic(0xf6f0ff), iris = basic(0x9b30ff), pup = basic(0x000000);
         for (let i = 0; i < 9; i++) {
@@ -6279,8 +6357,9 @@
     }
     function updEyes(e, dt) {
         const P = S.P;
-        if (S.cur !== e.room.n) { e.dead = true; return; }
+        if (S.cur > e.room.n || (!mpOn() && S.cur !== e.room.n)) { e.dead = true; return; }
         e.mesh.children.forEach((c, i) => { if (c.isGroup) c.lookAt(camera.position); });
+        if (S.cur !== e.room.n) { S.eyesLook = false; return; }
         e.mesh.position.y = 1.9 + Math.sin(S.time * 1.6) * 0.12;
         e.snd -= dt;
         if (e.snd <= 0) { e.snd = 2.2; sound.drWhisper(); }
@@ -6361,6 +6440,64 @@
     }
     function lerp(a, b, t) { return a + (b - a) * t; }
 
+    // ---------- THE JANITOR (new): punishes loitering in one room ----------
+    function makeJanitor() {
+        const g = new THREE.Group();
+        const coat = mat(0x1b2a24, 0x050806), dark = mat(0x0b0b0e, 0x020203), skin = mat(0x9a9480, 0x101008);
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.55, 1.9, 10), coat); body.position.y = 1.05; body.rotation.x = 0.18; g.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 10), skin); head.position.set(0, 2.15, 0.22); head.scale.set(0.9, 1.15, 0.9); g.add(head);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.3, 0.14, 12), dark); cap.position.set(0, 2.38, 0.2); g.add(cap);
+        const brim = new THREE.Mesh(geo(0.42, 0.03, 0.22), dark); brim.position.set(0, 2.32, 0.42); g.add(brim);
+        [-0.09, 0.09].forEach((x) => { const e = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 6), basic(0xfff2a0)); e.position.set(x, 2.18, 0.45); g.add(e); });
+        const eh = halo(0xfff2a0, 0.9, 0.5); eh.position.set(0, 2.18, 0.46); g.add(eh);
+        const mop = new THREE.Group();
+        const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 2.2, 6), mat(0x8a6a3a)); stick.position.y = 1.1; mop.add(stick);
+        const head2 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.22, 0.32, 8), mat(0x6a6a5a)); head2.position.y = 0.12; mop.add(head2);
+        mop.position.set(0.5, 0, 0.3); mop.rotation.z = 0.25; g.add(mop);
+        g.userData.mop = mop;
+        const keys = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.015, 6, 12), mat(0xc9a227, 0x3a2a00)); keys.position.set(-0.36, 1.0, 0.25); g.add(keys);
+        return g;
+    }
+    function startJanitor(room) {
+        const P = S.P;
+        const side = P.z < (room.z0 + room.z1) / 2 ? 1 : -1;   // come from the far end of the room
+        const e = { type: 'janitor', room: room, mesh: makeJanitor(), x: clamp(-P.x, -room.W / 2 + 1, room.W / 2 - 1), z: side > 0 ? room.z0 - 1.2 : room.z1 + 1.2, t: 0, snd: 0, spd: 1.1 };
+        e.mesh.position.set(e.x, 0, e.z);
+        S.root.add(e.mesh);
+        S.ents.push(e);
+        e.onDie = () => { const g = $('dr-gray'); if (g) g.style.opacity = 0; };
+        sound.drSlam();
+        sound.tone('sine', 880, 870, 0, 1.6, 0.08); sound.tone('sine', 1320, 1310, 0.05, 1.4, 0.04);
+        sub('🔔 *DING* — THE JANITOR is here. "No loitering." LEAVE THIS ROOM!', 4);
+        achieve('janitor', 'Mind The Wet Floor');
+    }
+    function updJanitor(e, dt) {
+        const P = S.P;
+        if (S.cur !== e.room.n || S.dead) {
+            e.dead = true;
+            if (!S.dead && S.cur > e.room.n) sub(pick(['The Janitor goes back to mopping. Grumpily.', 'You left before he finished. He hates that.']), 3);
+            return;
+        }
+        const g = $('dr-gray'); if (g) g.style.opacity = 0.85;
+        e.t += dt;
+        e.spd = Math.min(4.6, 1.1 + e.t * 0.22);
+        const dx = P.x - e.x, dz = P.z - e.z, d = Math.hypot(dx, dz) || 1;
+        e.x += dx / d * e.spd * dt; e.z += dz / d * e.spd * dt;   // he walks through furniture
+        e.mesh.position.set(e.x, Math.abs(Math.sin(e.t * 5)) * 0.05, e.z);
+        e.mesh.rotation.y = Math.atan2(dx, dz);
+        e.mesh.userData.mop.rotation.x = Math.sin(e.t * 4) * 0.35;
+        S.flicker = Math.max(S.flicker, 0.05);
+        e.snd -= dt;
+        if (e.snd <= 0) { e.snd = 0.6; sound.drStep(0.12); if (Math.random() < 0.3) sound.tone('triangle', 1200, 900, 0, 0.12, 0.03); }
+        if (d < 1.3) {
+            if (P.hidden) { exitHide(false); sub('He yanked you out of your hiding spot. "NO. LOITERING."', 2.6); }
+            hurt(45, 'janitor');
+            e.dead = true;
+            if (!S.dead) sub('The Janitor whacks you with the mop and vanishes. KEEP MOVING!', 3);
+        }
+    }
+    DEATHS.janitor = { q: ['You died to who you call The Janitor…', 'You loitered. The Janitor does not tolerate loitering.', 'Mopped up. Literally.'], h: 'Hint: do not stay in one room for too long. A squeaky mop means the Janitor is close — move to the next room.' };
+
     // ---------- Timothy & Jack (jump scares) ----------
     function scare(emoji, secs) {
         const el = $('dr-scare');
@@ -6390,6 +6527,7 @@
     function startChase(room) {
         if (room.chaseTriggered || (S.chase && S.chase.phase !== 'done')) return;
         room.chaseTriggered = true;
+        mpEmit('chase', { n: room.n });
         const idx = room.chaseIdx;
         ensureRooms(room.n + 7);
         const A = makeAlex();
@@ -6487,15 +6625,34 @@
         }
         // phase 'run'
         c.run += dt; c.hitCd -= dt;
+        const follow = mpOn() && !mpAuth();
         let gap = c.z - cz;
-        if (c.stun > 0) c.stun -= dt;
+        if (follow) {
+            // another player simulates Alex: copy their snapshot
+            const sn = MPH.alexSnap && MPH.alexSnap();
+            if (sn) { c.x = sn.x; c.z = sn.z; c.stun = sn.stun || 0; c.spd = sn.spd || c.spd; }
+        } else if (c.stun > 0) c.stun -= dt;
         else {
+            // chase the player furthest behind (in solo: you)
+            let tx = P.x, tz = cz;
+            if (mpOn()) {
+                let best = null;
+                mpPlayers().forEach((p) => { if (!p.dead && p.room <= c.lastN + 1 && p.room >= c.room.n - 1 && (!best || p.z > best.z)) best = p; });
+                if (best) { tx = best.x; tz = best.me ? cz : best.z; }
+            }
+            const tg = c.z - tz;
             let spd = (c.idx === 1 ? 4.9 : 5.3) * DF().spd + Math.min(0.7, c.run * 0.025);
-            if (gap > 24) spd *= 1.45; else if (gap > 15) spd *= 1.15;
-            else if (gap < 4) spd *= 0.92;          // ease off right behind you so a sprint gets you away
+            if (tg > 24) spd *= 1.45; else if (tg > 15) spd *= 1.15;
+            else if (tg < 4) spd *= 0.92;          // ease off right behind you so a sprint gets you away
             c.spd = spd;
             c.z -= spd * dt;
-            c.x += (P.x - c.x) * Math.min(1, dt * 1.6);
+            c.x += (tx - c.x) * Math.min(1, dt * 1.6);
+        }
+        if (mpOn() && !follow && MPH.pushAlex) MPH.pushAlex({ x: c.x, z: c.z, stun: c.stun, spd: c.spd || 0, n: c.room.n });
+        // multiplayer: the simulating player ends the chase once everyone alive made it through
+        if (mpOn() && !follow && !c.endSent) {
+            const ps = mpPlayers().filter((p) => !p.dead);
+            if (ps.length && ps.every((p) => p.room > c.lastN)) { c.endSent = true; mpEmit('chaseEnd', { n: c.room.n }); c.phase = 'slam'; c.slamT = 0.55; return; }
         }
         gap = c.z - cz;
         A.visible = true;
@@ -6513,10 +6670,13 @@
         if (c.debrisT <= 0) { c.debrisT = rnd(0.9, 1.8); chaseDebris(P.x + rnd(-3, 3), cz + rnd(3, 8)); }
         S.shake = Math.max(S.shake, gap < 12 ? 0.18 : 0.05);
         updDanger(gap);
-        if (c.hitCd <= 0 && c.stun <= 0 && gap < 1.5 && Math.abs(c.x - P.x) < 2.2) {
+        if (c.hitCd <= 0 && c.stun <= 0 && gap < 1.5 && gap > -2.5 && Math.abs(c.x - P.x) < 2.2 && !S.dead) {
             c.hitCd = 2; c.grabs++;
             hurt(100, 'alex');
-            if (!S.dead) { c.z += 14; c.stun = 1.2; P.slow = 1.2; sub('ALEX GRABBED YOU! …and dropped you? RUN!', 2.5); }
+            if (!S.dead) {
+                if (follow) mpEmit('alexHit', {}); else { c.z += 14; c.stun = 1.2; }
+                P.slow = 1.2; sub('ALEX GRABBED YOU! …and dropped you? RUN!', 2.5); S.stats.closeCalls++;
+            }
         }
         [S.cur, S.cur + 1].forEach((n) => { const r = S.rooms[n]; if (r && r.chaseObs) updObstacles(r, dt); });
     }
@@ -6540,7 +6700,7 @@
         const P = S.P, cz = camera.position.z, cx = P.x;
         room.chaseObs.chand.forEach((c) => {
             c.g.position.set(c.x, c.y, c.z);
-            if (c.state === 0 && cz > c.z && cz - c.z < 12) { c.state = 1; c.t = S.diff === 'CHILL' ? 1.3 : 1.0; sound.drBuzz(); if (!c.own) { c.ring.material = c.ring.material.clone(); c.own = true; } }
+            if (c.state === 0 && ((cz > c.z && cz - c.z < 12) || (mpOn() && mpPlayers().some((p) => !p.dead && p.z > c.z && p.z - c.z < 12)))) { c.state = 1; c.t = S.diff === 'CHILL' ? 1.3 : 1.0; sound.drBuzz(); if (!c.own) { c.ring.material = c.ring.material.clone(); c.own = true; } }
             else if (c.state === 1) {
                 c.t -= dt;
                 c.ring.material.opacity = 0.35 + 0.35 * Math.sin(S.time * 30);
@@ -6677,6 +6837,7 @@
             if (p.y <= 0.06 || t > 3) {
                 sound.drStomp(0.3); sound.drDrawer();
                 const L = S.library, mc = L && L.mrc;
+                if (mc && L.started && S.cur === L.room.n && mpOn() && !mpAuth()) { mpEmit('mcNoise', { x: p.x, z: p.z, r: 99, force: 1 }); sub('THUD! The book lands — Mrs. C turns toward the noise.', 2.4); achieve('decoy', 'Decoy Reader'); return true; }
                 if (mc && L.started && S.cur === L.room.n && mc.state !== 'dormant' && mc.state !== 'stun' && mc.state !== 'closet' && !(L.finale && mc.state === 'hunt' && Math.hypot(mc.x - P.x, mc.z - P.z) < 6)) {
                     mc.state = 'alert'; mc.tx = p.x; mc.tz = p.z; mc.wait = 0; mc.stuck = 0; mc.path = []; mc.lunge = false;
                     sub(pick(['THUD! Mrs. C whips around toward the noise.', 'The book lands loudly. She is heading over there…', 'Nice throw. She takes the bait.']), 2.6);
@@ -6692,6 +6853,7 @@
     function makeNoise(rad, x, z) {
         const L = S.library;
         if (!L || !L.mrc || !L.started) return;
+        if (mpOn() && !mpAuth()) { if (!MPH.applying && S.cur === L.room.n) mpEmit('mcNoise', { x: x, z: z, r: rad }); return; }
         const mc = L.mrc;
         if (mc.state === 'dormant' || mc.state === 'stun' || mc.state === 'closet') return;
         if (Math.hypot(mc.x - x, mc.z - z) < rad) mcHear(mc, x, z);
@@ -6896,11 +7058,29 @@
         // player noise
         const dist = Math.hypot(mc.x - P.x, mc.z - P.z);
         const heard = Math.max(P.noiseShown, P.noiseKick);
+        const follow = mpOn() && !mpAuth();
         $('dr-noisebar').style.width = clamp(heard / 18 * 100, 0, 100) + '%';
         const st = $('dr-mcstate'); if (st) st.textContent = mcStateText(mc, L) + (mc.state !== 'dormant' ? '   (' + Math.round(dist) + ' m)' : '');
-        if (mc.state !== 'dormant' && mc.state !== 'stun' && mc.state !== 'closet' && !P.hidden && heard > 0.5 && dist < heard * (L.ear || 1)) {
+        const awake = mc.state !== 'dormant' && mc.state !== 'stun' && mc.state !== 'closet';
+        if (awake && !P.hidden && !S.dead && heard > 0.5 && dist < heard * (L.ear || 1)) {
             mc.hearT -= dt;
-            if (mc.hearT <= 0) { mc.hearT = 0.25; mcHear(mc, P.x, P.z); mc.lunge = dist < 5 && heard > 2; }
+            if (mc.hearT <= 0) {
+                mc.hearT = 0.25;
+                if (follow) mpEmit('mcNoise', { x: P.x, z: P.z, r: 99, lunge: dist < 5 && heard > 2 ? 1 : 0 });
+                else { mcHear(mc, P.x, P.z); mc.lunge = dist < 5 && heard > 2; }
+            }
+        }
+        // the simulating player also listens to everyone else in the room
+        if (!follow && mpOn() && awake) {
+            mc.rHearT = (mc.rHearT || 0) - dt;
+            if (mc.rHearT <= 0) {
+                mc.rHearT = 0.25;
+                mpPlayers().forEach((p) => {
+                    if (p.me || p.dead || p.hidden || p.room !== room.n) return;
+                    const d2 = Math.hypot(mc.x - p.x, mc.z - p.z);
+                    if (p.noise > 0.5 && d2 < p.noise * (L.ear || 1)) { mcHear(mc, p.x, p.z); mc.lunge = d2 < 5 && p.noise > 2; }
+                });
+            }
         }
         // footsteps (so you can hear her coming)
         mc.stepT -= dt;
@@ -6908,20 +7088,38 @@
         mc.mesh.userData.tag.lookAt(camera.position);
         const DSPD = S.diff === 'CHILL' ? 0.85 : S.diff === 'DETENTION' ? 1.18 : 1;
         const ANG = L.angry || 1;
+        // hunting: go for the closest player who is out in the open
+        function huntTarget() {
+            let best = null, bd = 1e9;
+            mpPlayers().forEach((p) => {
+                if (p.dead || p.hidden || p.room !== room.n) return;
+                const d2 = Math.hypot(mc.x - p.x, mc.z - p.z);
+                if (d2 < bd) { bd = d2; best = p; }
+            });
+            return best;
+        }
         // behaviours
         mc.mesh.rotation.x = 0;
-        if (mc.state === 'stun') {
+        if (follow) {
+            const sn = MPH.mrcSnap && MPH.mrcSnap();
+            if (sn) {
+                mc.x = sn.x; mc.z = sn.z;
+                if (sn.st) mc.state = sn.st;
+                if (sn.ry !== undefined) mc.mesh.rotation.y = sn.ry;
+            }
+        } else if (mc.state === 'stun') {
             mc.stun -= dt;
             mc.mesh.rotation.z = 0;
             if (mc.stun <= 0) {
                 mc.mesh.rotation.z = 0;
                 if (L.finale) { mc.state = 'hunt'; }
-                else { mc.state = 'alert'; mc.tx = P.x; mc.tz = P.z; mc.path = []; sub('Mrs. C shakes it off. She looks… irritated.', 2.6); }
+                else { mc.state = 'alert'; const ht = huntTarget(); mc.tx = ht ? ht.x : P.x; mc.tz = ht ? ht.z : P.z; mc.path = []; sub('Mrs. C shakes it off. She looks… irritated.', 2.6); }
             }
         } else if (mc.state === 'hunt') {
-            if (!P.hidden) { mc.tx = P.x; mc.tz = P.z; }
+            const ht = huntTarget();
+            if (ht) { mc.tx = ht.x; mc.tz = ht.z; }
             const d = mcGo(mc, room, mc.tx, mc.tz, 5.3 * DSPD, dt, true);
-            if (P.hidden && d < 1.0) { mc.state = 'search'; mc.wait = 2.5; }
+            if (!ht && d < 1.0) { mc.state = 'search'; mc.wait = 2.5; }
         } else if (mc.state === 'alert') {
             const lx = mc.x, lz = mc.z;
             const spd = 4.5 * DSPD * ANG * (mc.lunge && dist < 5 ? 1.45 : 1);
@@ -6946,39 +7144,70 @@
             if (d < 0.9 || mc.stuck > 12) { mc.state = 'listen'; mc.listenT = rnd(1.5, 3); mc.stuck = 0; }
         } else if (mc.state === 'closet') {
             mc.mesh.rotation.x = 0;
+            // a teammate is doing the heartbeat minigame: give up if they never answer
+            if (mc.closetFor) { mc.closetT = (mc.closetT || 0) + dt; if (mc.closetT > 16) { mc.closetFor = null; mc.state = 'patrol'; pickPatrol(mc, room, true); } }
         }
+        if (mpOn() && !follow && MPH.pushMrc) MPH.pushMrc({ x: mc.x, z: mc.z, st: mc.state, ry: mc.mesh.rotation.y, n: room.n });
         mc.mesh.position.set(mc.x, 0, mc.z);
         const mv = Math.hypot(mc.x - (mc.ax === undefined ? mc.x : mc.ax), mc.z - (mc.az === undefined ? mc.z : mc.az)) / Math.max(dt, 1e-3);
         mc.ax = mc.x; mc.az = mc.z;
-        mc.spdS = (mc.spdS || 0) + (mv - (mc.spdS || 0)) * Math.min(1, dt * 6);
+        mc.spdS = (mc.spdS || 0) + (Math.min(mv, 12) - (mc.spdS || 0)) * Math.min(1, dt * 6);
         const ast = mc.state === 'stun' ? 'stun' : mc.state === 'dormant' ? 'dormant' : mc.state === 'listen' || mc.state === 'closet' ? 'listen' : mc.state === 'search' ? 'search'
             : mc.spdS > 3.2 ? 'run' : mc.spdS > 0.4 ? 'walk' : 'idle';
         if (mc.mesh.userData.rig) mc.mesh.userData.rig.angry = mc.state === 'hunt';
         animRig(mc.mesh, ast, dt, mc.spdS);
         // she sniffs out a hiding player who is too close
-        if (P.hidden && P.hidden.library && mc.state !== 'dormant' && mc.state !== 'stun' && mc.state !== 'closet' && Math.hypot(mc.x - P.hidden.x, mc.z - P.hidden.z) < 3.0 && !L.heartCd) {
-            mc.state = 'closet';
-            const face = Math.atan2(P.hidden.x - mc.x, P.hidden.z - mc.z);
-            mc.mesh.rotation.y = face;
+        if (P.hidden && P.hidden.library && !S.dead && awake && Math.hypot(mc.x - P.hidden.x, mc.z - P.hidden.z) < 3.0 && !L.heartCd && !HB.on) {
+            if (follow) mpEmit('mcCloset', { x: P.hidden.x, z: P.hidden.z });
+            else {
+                mc.state = 'closet'; mc.closetFor = null;
+                mc.mesh.rotation.y = Math.atan2(P.hidden.x - mc.x, P.hidden.z - mc.z);
+            }
             sub('…She stopped right outside your wardrobe. Keep your heartbeat steady!', 3);
             startHeartbeat((ok) => {
                 L.heartCd = 6;
+                if (follow) mpEmit('mcClosetRes', { ok: ok ? 1 : 0 });
                 if (ok) {
-                    mc.state = L.finale ? 'search' : 'patrol'; mc.wait = 1.5; pickPatrol(mc, room, true);
+                    if (!follow) { mc.state = L.finale ? 'search' : 'patrol'; mc.wait = 1.5; pickPatrol(mc, room, true); }
                     sub(pick(['Phew. She walks away, muttering about mice.', 'She leaves. Your heart can start beating normally again.']), 3);
                     achieve('heart', 'Nerves Of Steel');
+                    S.stats.closeCalls++;
                 } else {
                     exitHide(false);
                     hurt(100, 'mrsc');
-                    if (!S.dead) { mc.state = 'stun'; mc.stun = 2.5; sub('She ripped the door open!… and missed. RUN!', 2.5); }
+                    if (!S.dead) { if (!follow) { mc.state = 'stun'; mc.stun = 2.5; } sub('She ripped the door open!… and missed. RUN!', 2.5); }
                 }
             });
         }
         if (L.heartCd) { L.heartCd = Math.max(0, L.heartCd - dt); }
         // kill on touch
-        if (mc.state !== 'dormant' && mc.state !== 'stun' && mc.state !== 'closet' && !P.hidden && dist < 1.7) {
+        if (awake && !P.hidden && !S.dead && dist < 1.7 && !(L.hitCd > 0)) {
             hurt(100, 'mrsc');
-            if (!S.dead) { mc.state = 'stun'; mc.stun = 2.5; sub('Mrs. C swung and missed (barely). RUN!', 2.5); }
+            L.hitCd = 2.5;
+            if (!S.dead) { if (follow) mpEmit('mcHit', {}); else { mc.state = 'stun'; mc.stun = 2.5; } sub('Mrs. C swung and missed (barely). RUN!', 2.5); S.stats.closeCalls++; }
+        }
+        if (L.hitCd > 0) L.hitCd -= dt;
+    }
+    // multiplayer: the simulating player applies teammates' requests to Mrs. C
+    function mcRemote(type, d) {
+        const L = S.library, mc = L && L.mrc;
+        if (!mc || !L.started || !L.room) return;
+        const room = L.room;
+        if (type === 'mcNoise') {
+            if (mc.state === 'dormant' || mc.state === 'stun' || mc.state === 'closet') return;
+            if (d.force) { mc.state = 'alert'; mc.tx = d.x; mc.tz = d.z; mc.wait = 0; mc.stuck = 0; mc.path = []; mc.lunge = false; return; }
+            if (Math.hypot(mc.x - d.x, mc.z - d.z) < (d.r || 10)) { mcHear(mc, d.x, d.z); if (d.lunge) mc.lunge = true; }
+        } else if (type === 'mcHit') { if (mc.state !== 'dormant') { mc.state = 'stun'; mc.stun = 2.5; } }
+        else if (type === 'mcStun') { mc.state = 'stun'; mc.stun = d.s || 10; }
+        else if (type === 'mcCloset') {
+            if (mc.state === 'closet' || mc.state === 'dormant' || mc.state === 'stun') return;
+            mc.state = 'closet'; mc.closetFor = d.from || 'x'; mc.closetT = 0;
+            mc.mesh.rotation.y = Math.atan2(d.x - mc.x, d.z - mc.z);
+        } else if (type === 'mcClosetRes') {
+            if (mc.state !== 'closet') return;
+            mc.closetFor = null;
+            if (d.ok) { mc.state = L.finale ? 'search' : 'patrol'; mc.wait = 1.5; pickPatrol(mc, room, true); }
+            else { mc.state = 'stun'; mc.stun = 2.5; }
         }
     }
     function pickPatrol(mc, room, far) {
@@ -6996,6 +7225,7 @@
     function useCrucifix() {
         const L = S.library, c = S.chase;
         if (L && L.mrc && L.started && L.mrc.state !== 'dormant' && Math.hypot(L.mrc.x - S.P.x, L.mrc.z - S.P.z) < 9) {
+            if (mpOn() && !mpAuth()) mpEmit('mcStun', { s: 10 });
             L.mrc.state = 'stun'; L.mrc.stun = 10;
             sound.drRoar(); S.shake = 0.6;
             sub('✝️ Crucifix! Mrs. C reels back, spiritually offended, for 10 seconds.', 3.5);
@@ -7003,6 +7233,7 @@
             return true;
         }
         if (c && c.phase === 'run' && c.z - S.P.z < 16) {
+            if (mpOn() && !mpAuth()) mpEmit('alexStun', { s: 6.5 });
             c.stun = 6.5; c.z += 10;
             sound.drRoar(); S.shake = 0.6;
             sub('✝️ Alex recoils! The gravy was blessed. (6 seconds of peace.)', 3.5);
@@ -7074,11 +7305,12 @@
     }
     function playCine(id, ctx) {
         const def = CINES[id];
-        if (!def || !S.P) return false;
+        if (!def || !S.P || S.noCine || S.dead) return false;
         const shots = def.shots(ctx);
         Object.assign(CINE, { on: true, id: id, shots: shots, i: 0, st: 0, ctx: ctx, end: def.end, titleT: 0 });
         S.cine = true;
         $('dr-cine').style.display = 'block';
+        $('dr-cine').querySelector('.skip').textContent = mpOn() ? '🎬 PLAYING FOR EVERYONE' : 'SPACE / E — skip';
         root.classList.add('cine');
         setTimeout(() => { $('dr-cine').classList.add('on'); }, 20);
         $('dr-cine').classList.add('on');
@@ -7132,9 +7364,10 @@
     }
     function eyePos() { return { x: S.P.x, y: EYE_H, z: S.P.z }; }
     window.addEventListener('keydown', (e) => {
-        if (!S.active || !CINE.on) return;
+        if (!S.active || !CINE.on || S.chatOpen) return;
         if (e.code === 'Space' || e.code === 'KeyE' || e.code === 'Enter' || e.code === 'Escape') {
             e.stopImmediatePropagation(); e.preventDefault();
+            if (mpOn()) { sub('🎬 Cutscene is playing for everyone — hang tight!', 1.5); return; }
             if (!e.repeat && CINE.i + CINE.st > 0.4) endCine();
         }
     }, true);
@@ -7279,7 +7512,7 @@
         if (HB.on && HB.t > HB.end) hbFinish(true);
     }
     window.addEventListener('keydown', (e) => {
-        if (!S.active || !HB.on) return;
+        if (!S.active || !HB.on || S.chatOpen) return;
         const c = e.code;
         if (c === 'KeyA' || c === 'ArrowLeft' || c === 'KeyD' || c === 'ArrowRight' || c === 'KeyE') {
             e.stopImmediatePropagation(); e.preventDefault();
@@ -7315,7 +7548,7 @@
         const finish = () => {
             if (fin) return; fin = true;
             o.style.display = 'none';
-            $('dr-end').style.display = 'flex';
+            if (mpOn() && MPH.onLocalWin) MPH.onLocalWin(); else $('dr-end').style.display = 'flex';
         };
         o.onclick = finish;
         const step = () => {
@@ -7543,6 +7776,7 @@
         if (L.carry > 0) {
             for (let i = 0; i < L.carry; i++) { const sl = L.slots[L.fuses + i]; if (sl) sl.material = mat(0x16a34a, 0x0a5a1a); }
             L.fuses += L.carry; L.carry = 0;
+            mpEmit('fuse', { total: L.fuses });
             sound.drUnlock(); sound.drSlam();
             makeNoise(26, L.breaker.x, L.breaker.z);
             S.shake = Math.max(S.shake, 0.3);
@@ -7556,6 +7790,7 @@
         openBreaker();
     }
     function openBreaker() {
+        if (!BRK.target.length && S.library && S.library.brk) { BRK.target = S.library.brk.slice(); BRK.cur = BRK.target.map(() => false); }
         if (!BRK.target.length) {
             BRK.target = []; for (let i = 0; i < 8; i++) BRK.target.push(Math.random() < 0.5);
             if (BRK.target.every((v) => !v)) BRK.target[rint(0, 7)] = true;
@@ -7587,6 +7822,7 @@
         if (right === BRK.target.length) {
             closeBreaker();
             L.powered = true;
+            mpEmit('power', {});
             sound.drUnlock(); sound.drAchv();
             const room = L.room, d = room && room.door;
             if (d) { d.bossLock = false; d.locked = false; openDoor(d, true); }
@@ -7630,7 +7866,10 @@
         if (TEX[key]) return TEX[key];
         const c = document.createElement('canvas'); c.width = w; c.height = h || w;
         const g = c.getContext && c.getContext('2d');
+        // textures are cached, so drawing them must not eat numbers from the seeded room generator
+        const sr = Math.random; Math.random = REAL_RANDOM;
         if (g) { try { draw(g, w, h || w); } catch (e) { /* ignore */ } }
+        Math.random = sr;
         const t = new THREE.CanvasTexture(c);
         if (THREE.RepeatWrapping !== undefined) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
         if (t.userData) t.userData.shared = true;
@@ -8124,7 +8363,9 @@
             '<div class="tip">📚 <b>Library:</b> the desk note gives the symbol order, the 5 glowing books give the digits.</div>',
             '<div class="tip">💓 <b>Hiding from her?</b> Press A / D with the heartbeats.</div>',
             '<div class="tip">😁 <b>Giggle</b> on dark ceilings, 🚪 <b>Dupe</b> doors with the wrong number, 🦷 <b>Snares</b> on the floor.</div>',
-            '<div class="tip">✨ <b>Guiding Light</b> revives once. 🔘 <b>Knobs</b> buy gear before a run.</div>'
+            '<div class="tip">✨ <b>Guiding Light</b> revives once. 🔘 <b>Knobs</b> buy gear before a run.</div>',
+            '<div class="tip">🧹 <b>NEW: the Janitor</b> hates loiterers. Too long in one room? Move on! 🗄️ <b>Lockers</b> work as hiding spots.</div>',
+            '<div class="tip">👥 <b>NEW: multiplayer!</b> Play with friends online — same hotel, shared chases, shared Library. <b>T</b> chat · <b>Q</b> ping · <b>G</b> wave.</div>'
         ].join('');
         // guiding-light typewriter on the death screen
         const endEl = $('dr-end');
@@ -9201,6 +9442,8 @@
         P.hAnim = { t: 0, dur: spot.kind === 'bed' ? 0.55 : 0.5, fx: camera.position.x, fy: camera.position.y, fz: camera.position.z, fyaw: P.yaw, fpitch: P.pitch, enter: true };
         P.x = spot.x; P.z = spot.z; P.yaw = spot.yaw; P.pitch = 0; P.vx = P.vz = 0;
         hideFx(spot.kind === 'bed' ? 'bed' : 'ward', true);
+        $('dr-hide').classList.toggle('locker', spot.kind === 'locker');
+        S.stats.hides++;
         sound.drCreak();
         S.hideCount++;
         if (S.hideCount >= 10) achieve('hide10', 'Professional Hider');
@@ -9225,10 +9468,18 @@
         while (S.built < upTo) {
             S.built++;
             const keepLib = S.library;
-            const r = createRoom(S.built);
-            if (window.__drBuilt) { try { window.__drBuilt(r); } catch (e) { console.error(e); } }
+            const bn = S.built;
+            paintN = bn * 3;
+            const r = withSeed('room' + bn, () => {
+                const rr = createRoom(bn);
+                if (window.__drBuilt) { try { window.__drBuilt(rr); } catch (e) { console.error(e); } }
+                return rr;
+            });
+            // stable ids so multiplayer can say "drawer 12:3 was opened"
+            r.inter.forEach((it, i) => { it.uid = bn + ':' + i; if (it.spot) it.spot.uid = it.uid; });
             try { batchRoom(r); } catch (e) { console.error('batch', e); }
             if (isLibLike(r)) { r.lib = S.library; S.library = keepLib; }
+            if (r.lib && r.kind === 'boss') withSeed('brk', () => { r.lib.brk = []; for (let i = 0; i < 8; i++) r.lib.brk.push(Math.random() < 0.5); if (r.lib.brk.every((v) => !v)) r.lib.brk[rint(0, 7)] = true; });
             if (r.kind === 'library') {
                 r.door.padlock = true; r.door.locked = true;
             }
@@ -9240,6 +9491,7 @@
             }
             if (r.isChase || r.isChaseStart) r.door.auto = true;
             if (S.unlockAll && r.door) { r.door.padlock = false; r.door.locked = false; r.door.bossLock = false; if (r.door.lockMesh) r.door.lockMesh.visible = false; }
+            if (MPH.built) { try { MPH.built(r); } catch (e) { console.error('mp built', e); } }
         }
     }
     function refreshRoomVis() {
@@ -9267,14 +9519,17 @@
         S.timeInRoom = 0;
         if (S.tint && !S.chase && S.library && S.library.finale && S.library.room && room.n > S.library.room.n) S.tint = 0;
         updRoomHUD(room);
+        // multiplayer: only the first player to reach a room rolls its event (it is then sent to everyone)
+        if (!room.entered && room.mpClaim === undefined) room.mpClaim = !mpOn() || !MPH.claimRoom || MPH.claimRoom(room.n);
         if (window.__drRoom) { try { window.__drRoom(room); } catch (e) { console.error(e); } }
         if (room.n > S.maxRoom) { S.maxRoom = room.n; saveBest(room.n); }
         ensureRooms(room.n + 2);
         if (room.entered) return;
         room.entered = true;
-        if (S.chase && S.chase.phase === 'run' && room.n === S.chase.lastN + 1) { S.chase.phase = 'slam'; S.chase.slamT = 0.55; }
+        if (S.chase && S.chase.phase === 'run' && room.n === S.chase.lastN + 1 && !mpOn()) { S.chase.phase = 'slam'; S.chase.slamT = 0.55; }
         if (isLibLike(room)) {
             room.sealPending = true;
+            mpEmit('lib', { n: room.n });
             startLibrary(room);
             if (room.kind === 'boss') achieve('boss', 'The Final Chapter'); else achieve('library', 'Shhh… The Library');
             return;
@@ -9283,19 +9538,22 @@
         if (room.kind === 'jeff') { achieve('jeff', 'Retail Therapy'); sub("Jeff: \"Welcome to my shop! Prices are fair. Mostly. Safe room, no monsters!\"", 4.5); S.quiet = 1; return; }
         if (room.isChase || room.isChaseStart) return;
         if (isPreEyes(room.n)) { sub(pick(['The walls have EYES. Lots of them. Do not panic. (Panic a little.)', 'More eyes. They all follow you. Something is coming…', 'Eyes everywhere. A cold wet smell. Hmm.']), 4); return; }
-        if (room.n >= 1) rollEvent(room);
+        if (room.n >= 1 && room.mpClaim !== false) rollEvent(room);
     }
 
     // ---------- doors ----------
     function openDoor(door, quiet) {
         if (door.open || door.jammed) return;
         door.open = true;
+        S.stats.doors++;
         if (!quiet) { sound.drCreak(); bump(10); }
+        mpEmit('door', { n: door.n - 1 });
     }
     function unlockDoor(door) {
         door.locked = false;
         if (door.lockMesh) door.lockMesh.visible = false;
         sound.drUnlock();
+        mpEmit('unlock', { n: door.n - 1 });
     }
     function tryDoor(door) {
         if (door.open || door.jammed) return;
@@ -9369,6 +9627,7 @@
             sound.drUnlock();
             hidePad();
             sub('CLICK! The padlock falls off. The exit is open — GO GO GO!', 4);
+            mpEmit('libOpen', { n: S.cur });
             openDoor(d, true);
             libFinale();
         } else {
@@ -9406,6 +9665,7 @@
             if (t.door.locked) return 'Locked door ' + pad3(t.door.n) + (invCount('key') || invCount('skeleton') ? ' — unlock' : ' (find the key)');
         }
         if (t.kind === 'chest') return invCount('lockpick') ? 'Pick the chest lock 🔓' : 'Locked chest (needs Lockpicks)';
+        if (t.kind === 'hide' && mpOn() && MPH.occupied) { const who = MPH.occupied(t.spot.uid); if (who) return 'Occupied by ' + who; }
         return t.label || 'Interact';
     }
     function interact() {
@@ -9416,6 +9676,13 @@
         const t = findTarget();
         if (!t) return;
         handsPunch();
+        if (t.kind === 'hide' && mpOn() && MPH.occupied && MPH.occupied(t.spot.uid)) { sound.drLocked(); sub('Someone is already hiding in there! Find another spot!', 2.4); return; }
+        const wasDead = !!t.dead;
+        try { interactInner(t); } finally {
+            if (!wasDead && t.dead && t.uid) { S.stats.items++; mpEmit('use', { u: t.uid, k: t.kind }); }
+        }
+    }
+    function interactInner(t) {
         if (t.onUse) { try { t.onUse(t); } catch (e) { console.error(e); } return; }
         switch (t.kind) {
             case 'door': tryDoor(t.door); break;
@@ -9473,6 +9740,7 @@
     }
     function die(by) {
         if (window.__drRevive && window.__drRevive(by)) return;
+        if (mpOn()) { mpDie(by); return; }
         S.dead = true;
         closeBreaker(false);
         try { document.exitPointerLock(); } catch (e) { /* ignore */ }
@@ -9483,15 +9751,21 @@
         $('dr-endt').textContent = 'YOU DIED';
         $('dr-endl').textContent = pick(d.q);
         $('dr-endh').textContent = d.h;
-        $('dr-ends').textContent = 'Reached Room ' + S.cur + '  •  🪙 ' + S.gold + '  •  Best: Room ' + Math.max(S.maxRoom, bestRoom());
+        $('dr-ends').innerHTML = 'Reached Room ' + S.cur + '  •  🪙 ' + S.gold + '  •  Best: Room ' + Math.max(S.maxRoom, bestRoom()) + '<br>' + runStatsLine();
         deathScare(by);
         setTimeout(() => { if (S.dead) $('dr-end').style.display = 'flex'; }, 800);
         sound.drRoar();
         saveBest(S.maxRoom);
         if (window.__drEnd) { try { window.__drEnd(false, by); } catch (e) { console.error(e); } }
     }
+    function runStatsLine() {
+        const st = S.stats || {}, t = Math.floor(S.time);
+        return '<span style="font-size:12px;opacity:.85">⏱ ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0') + ' • 🚪 ' + (st.doors || 0) + ' doors • 💨 ' + (st.rushes || 0) + ' rushes • 🫥 ' + (st.hides || 0) + ' hides • 🎒 ' + (st.items || 0) + ' finds • 😰 ' + (st.closeCalls || 0) + ' close calls' +
+            '<br>🎲 Seed <b style="font-family:monospace;letter-spacing:2px">' + S.seed + '</b> (type it in to replay this exact hotel)</span>';
+    }
     function win() {
         if (S.won || S.dead) return;
+        mpEmit('win', { t: Math.floor(S.time) });
         S.won = true;
         try { document.exitPointerLock(); } catch (e) { /* ignore */ }
         $('dr-hide').style.display = 'none';
@@ -9499,12 +9773,12 @@
         $('dr-endt').textContent = '🎉 YOU ESCAPED!';
         $('dr-endl').textContent = 'Door 101 opens onto a parking lot, a sunset, and a coupon for free tater tots.';
         $('dr-endh').textContent = 'Achievements this run: ' + Object.keys(S.achv).length;
-        $('dr-ends').textContent = 'Time ' + mm + ':' + ss + '  •  🪙 ' + S.gold + '  •  Hides: ' + S.hideCount;
-        if (!playOutro()) $('dr-end').style.display = 'flex';
+        $('dr-ends').innerHTML = 'Time ' + mm + ':' + ss + '  •  🪙 ' + S.gold + '<br>' + runStatsLine();
+        if (!playOutro()) { if (mpOn() && MPH.onLocalWin) MPH.onLocalWin(); else $('dr-end').style.display = 'flex'; }
         sound.drAchv(); sound.drCoin();
         achieve('escape', 'Escaped The Hotel!');
         saveBest(TOTAL_ROOMS + 1);
-        if (window.__drEnd) { try { window.__drEnd(true); } catch (e) { console.error(e); } }
+        if (window.__drEnd && !mpOn()) { try { window.__drEnd(true); } catch (e) { console.error(e); } }
     }
 
     // ---------- flow ----------
@@ -9517,6 +9791,9 @@
     function setPause(on) {
         if (!S.active || S.dead || S.won) return;
         S.paused = on;
+        dk.w = dk.a = dk.s = dk.d = dk.shift = dk.ctrl = 0;
+        const pp = $('dr-pause').querySelector('p');
+        if (pp) pp.textContent = mpOn() ? '⚠️ Multiplayer: the hotel does NOT pause. Your team is still out there!' : 'The Hotel waits. It is very patient.';
         $('dr-pause').style.display = on ? 'flex' : 'none';
         if (on) { try { document.exitPointerLock(); } catch (e) { /* ignore */ } }
         else lockPointer();
@@ -9533,6 +9810,13 @@
         });
         S.P = newPlayer();
         S.cine = false;
+        S.seed = (RUN_OPTS.seed !== undefined && RUN_OPTS.seed !== null && RUN_OPTS.seed !== '') ? String(RUN_OPTS.seed).toUpperCase() : randomSeed();
+        if (RUN_OPTS.diff) S.diff = RUN_OPTS.diff;
+        S.mp = !!RUN_OPTS.mp;
+        S.stats = { rushes: 0, hides: 0, closeCalls: 0, items: 0, doors: 0, gold: 0 };
+        withSeed('chases', () => { CH1 = rint(30, 33); CH3 = rint(62, 66); });
+        CHASES[0][0] = CH1; CHASES[2][0] = CH3;
+        paintN = 0;
         cineReset();
         closeBreaker(false); BRK.target = [];
         Object.assign(S.P, { noiseShown: 0, noiseKick: 0, slow: 0, eyeH: EYE_H, vx: 0, vz: 0, px: 0, pz: 0 });
@@ -9546,8 +9830,9 @@
         try { if (typeof strobeOverlay !== 'undefined' && strobeOverlay) strobeOverlay.classList.add('hidden'); } catch (e) { /* ignore */ }
         try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) { /* ignore */ }
     }
-    function startDoors() {
+    function startDoors(opts) {
         if (typeof renderer === 'undefined' || !renderer) return;
+        RUN_OPTS = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : { seed: (window.__doorsSoloSeed || '') };
         try { sound.init(); sound.stopHum(); } catch (e) { /* ignore */ }
         if (!saved) {
             saved = { bg: scene.background, fog: scene.fog, amb: ambientLight.intensity, ambC: ambientLight.color.getHex(), pl: playerLight.intensity, wg: worldGroup.visible, far: camera.far };
@@ -9576,8 +9861,9 @@
         root.style.display = 'block';
         ['dr-pause', 'dr-end', 'dr-pad'].forEach((id) => { $(id).style.display = 'none'; });
         $('dr-hide').style.display = 'none'; $('dr-halt').style.display = 'none'; $('dr-noise').style.display = 'none'; $('dr-code').style.display = 'none';
-        $('dr-intro').style.display = 'flex';
+        $('dr-intro').style.display = RUN_OPTS.mp ? 'none' : 'flex';
         updRoomHUD(lobby); updGold(); updHP(); renderHotbar(); sub('', 0);
+        setHands(true);
         setCamera();
     }
     function beginRun() {
@@ -9585,9 +9871,10 @@
         S.running = true;
         if (window.__drBegin) { try { window.__drBegin(); } catch (e) { console.error(e); } }
         lockPointer();
-        sub('Welcome to the Lunch Hotel. Open Door 001 (press E at the door).', 5);
+        sub(S.mp ? 'Welcome to the Lunch Hotel, team. Stick together! (T = chat, Q = ping, G = wave)' : 'Welcome to the Lunch Hotel. Open Door 001 (press E at the door).', 5);
     }
     function exitDoors() {
+        if (MPH.onExit) { try { MPH.onExit(); } catch (e) { console.error(e); } }
         S.active = false; S.running = false;
         window.doorsActive = false;
         if (document.body.classList) document.body.classList.remove('doors-on');
@@ -9614,7 +9901,16 @@
     }
 
     // ---------- buttons ----------
-    $('dr-go').onclick = beginRun;
+    $('dr-go').onclick = () => {
+        const want = ($('dr-seed').value || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+        window.__doorsSoloSeed = want;
+        if (want && want !== S.seed) { startDoors({ seed: want }); }
+        beginRun();
+    };
+    $('dr-seed').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('dr-go').onclick(); });
+    $('dr-daily').onclick = () => { const d = new Date(); $('dr-seed').value = 'DAILY-' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0'); };
+    $('dr-rnd').onclick = () => { $('dr-seed').value = ''; };
+    $('dr-mpbtn').onclick = () => { if (window.__mpOpenLobby) window.__mpOpenLobby(); };
     $('dr-quit0').onclick = exitDoors;
     $('dr-resume').onclick = () => setPause(false);
     $('dr-quit1').onclick = exitDoors;
@@ -9739,11 +10035,241 @@
         });
         return true;
     }
+    // ============================================================
+    // MULTIPLAYER GLUE: death -> spectate, warps, applying teammates' actions
+    // ============================================================
+    function mpDie(by) {
+        if (CINE.on) endCine();
+        S.dead = true;
+        S.deathRoom = S.cur;
+        S.deathBy = by;
+        closeBreaker(false);
+        if (S.padOpen) { S.padOpen = false; $('dr-pad').style.display = 'none'; }
+        if (S.P.hidden) { S.P.hidden = null; S.P.hAnim = null; }
+        HB.on = false; $('dr-heart').style.display = 'none';
+        $('dr-hide').style.display = 'none';
+        const hfx = $('dr-hidefx'); if (hfx) hfx.style.display = 'none';
+        $('dr-halt').style.display = 'none';
+        $('dr-eyes').style.opacity = 0;
+        S.flashOn = false;
+        setHands(false);
+        deathScare(by);
+        sound.drRoar();
+        saveBest(S.maxRoom);
+        const d = DEATHS[by] || DEATHS.rush;
+        mpEmit('die', { by: by, n: S.cur });
+        if (MPH.onLocalDeath) { try { MPH.onLocalDeath(by, pick(d.q), d.h); } catch (e) { console.error(e); } }
+    }
+    // spectating teammates while dead (the world keeps running)
+    function spectTick(dt) {
+        S.time += dt;
+        if (S.flicker > 0) S.flicker = Math.max(0, S.flicker - dt);
+        const tg = MPH.spectTarget ? MPH.spectTarget() : null;
+        if (tg && tg.room >= 0) {
+            ensureRooms(Math.min(TOTAL_ROOMS, tg.room + 2));
+            if (S.rooms[tg.room] && tg.room !== S.cur) { S.cur = tg.room; updRoomHUD(S.rooms[S.cur]); }
+            S.P.x = tg.x; S.P.z = tg.z;
+            const room = S.rooms[S.cur];
+            const back = 2.8, fx = -Math.sin(tg.yaw), fz = -Math.cos(tg.yaw);
+            let cx = tg.x - fx * back, cz = tg.z - fz * back;
+            if (room) { cx = clamp(cx, -room.W / 2 + 0.4, room.W / 2 - 0.4); cz = clamp(cz, room.z1 + 0.4, room.z0 - 0.4); }
+            camera.position.set(cx, 2.35, cz);
+            camera.rotation.order = 'YXZ';
+            camera.lookAt(tg.x, tg.h || 1.5, tg.z);
+        } else setCamera();
+        refreshRoomVis();
+        updWorld(dt);
+        if (!S.freeze) { updEntsList(dt); updChase(dt); updLibrary(dt); }
+        updAnims(dt);
+        updateLights(); updLampFx();
+        if (fxLight && !S.ents.some((e) => (e.type === 'rush' || e.type === 'ambush') && e.phase === 'run')) fxLight.intensity = 0;
+        $('dr-prompt').style.display = 'none';
+        if (S.subT > 0) { S.subT -= dt; if (S.subT <= 0) $('dr-sub').textContent = ''; }
+        if (S.achvT > 0) { S.achvT -= dt; if (S.achvT <= 0) $('dr-achv').style.display = 'none'; }
+        applyShake(dt);
+    }
+    function clearLocalHazards() {
+        const P = S.P;
+        if (P.hidden) { P.hidden = null; P.hAnim = null; $('dr-hide').style.display = 'none'; const fx = $('dr-hidefx'); if (fx) fx.style.display = 'none'; }
+        if (S.padOpen) { S.padOpen = false; $('dr-pad').style.display = 'none'; }
+        closeBreaker(false);
+        if (HB.on) { HB.on = false; HB.done = null; $('dr-heart').style.display = 'none'; }
+        S.ents.forEach((e) => { if (e.type === 'screech' || e.type === 'halt') e.dead = true; });
+        $('dr-halt').style.display = 'none';
+    }
+    // move the local player straight into room n (chase start, library, respawn)
+    function warpTo(n, x, z, yaw) {
+        n = clamp(Math.floor(n), 0, TOTAL_ROOMS);
+        const P = S.P;
+        clearLocalHazards();
+        ensureRooms(Math.min(TOTAL_ROOMS, n + 2));
+        const room = S.rooms[n];
+        if (!room) return false;
+        for (let k = n - 2; k < n; k++) {
+            const r = S.rooms[k];
+            if (r && r.door && !r.door.jammed) { r.door.open = true; r.door.t = 1; r.door.locked = false; r.door.padlock = false; r.door.bossLock = false; if (r.door.lockMesh) r.door.lockMesh.visible = false; if (r.door.pivot) r.door.pivot.rotation.y = 1.9; }
+        }
+        S.cur = n;
+        if (room.mpClaim === undefined) room.mpClaim = false;
+        room.entered = true;
+        P.x = clamp(x, -room.W / 2 + 0.6, room.W / 2 - 0.6); P.z = z; P.vx = P.vz = 0; P.yaw = yaw || 0; P.pitch = 0;
+        if (!canStand(P.x, P.z)) P.x = 0;
+        if (n > S.maxRoom) { S.maxRoom = n; saveBest(n); }
+        S.timeInRoom = 0;
+        updRoomHUD(room);
+        refreshRoomVis();
+        setCamera();
+        return true;
+    }
+    function applyDoor(room, silent) {
+        const d = room && room.door;
+        if (!d || d.jammed) return;
+        if (d.locked || d.padlock) { d.locked = false; d.padlock = false; if (d.lockMesh) d.lockMesh.visible = false; }
+        if (!d.open) { d.open = true; if (!silent && Math.abs(room.n - S.cur) <= 1) sound.drCreak(); }
+    }
+    function applyUnlock(room) {
+        const d = room && room.door;
+        if (!d) return;
+        d.locked = false; if (d.lockMesh) d.lockMesh.visible = false;
+    }
+    function findInter(uid) {
+        const n = +String(uid).split(':')[0], room = S.rooms[n];
+        if (!room) return null;
+        for (let i = 0; i < room.inter.length; i++) if (room.inter[i].uid === uid) return room.inter[i];
+        return null;
+    }
+    function applyUse(t, who, silent) {
+        if (!t || t.dead) return;
+        t.dead = true;
+        const near = !silent && t.room && t.room.n === S.cur;
+        const L = (t.room && t.room.lib) || S.library;
+        switch (t.kind) {
+            case 'drawer': t.open = true; t.t = 0; if (near) sound.drDrawer(); break;
+            case 'chest': t.opened = true; if (near) sound.drDrawer(); break;
+            case 'book':
+                if (t.mesh) t.mesh.visible = false;
+                if (t.hint && L && !t.taken) {
+                    t.taken = true; L.found[t.pos] = L.code[t.pos]; L.got++;
+                    updCode();
+                    if (!silent) sub('📖 ' + (who || 'A teammate') + ' found a clue: ' + L.syms[t.pos] + ' = ' + L.code[t.pos], 4.5);
+                }
+                break;
+            case 'note':
+                if (t.mesh) t.mesh.visible = false;
+                if (L) { L.paper = true; updCode(); if (!silent) sub('📝 ' + (who || 'A teammate') + ' read the desk note: the order is ' + L.syms.join('  '), 5); }
+                break;
+            case 'dupe': {
+                const pl = t.room && t.room.pl && t.room.pl.dupe;
+                if (pl && pl.panel) pl.panel.material = new THREE.MeshLambertMaterial({ color: 0x1a0000, emissive: 0x550000 });
+                break;
+            }
+            case 'fuse': if (t.mesh) t.mesh.visible = false; if (!silent) sub('🔌 ' + (who || 'A teammate') + ' grabbed a fuse!', 2.5); break;
+            default: if (t.mesh) t.mesh.visible = false; if (t.icon) t.icon.visible = false;
+        }
+    }
+    function remoteRush(n, kind, ps, tut) {
+        if (n < S.cur - 3) return;   // way behind us: we would never meet it
+        ensureRooms(Math.min(TOTAL_ROOMS, n + 2));
+        const room = S.rooms[n];
+        if (!room) return;
+        startRush(kind, room, !!tut, ps);
+    }
+    function remoteEyes(n) {
+        const room = S.rooms[n];
+        if (!room || S.cur > n) return;
+        withSeed('eyes' + n, () => startEyesInner(room));
+    }
+    function remoteChase(n, slot) {
+        if (S.chase && S.chase.phase !== 'done') return;
+        ensureRooms(Math.min(TOTAL_ROOMS, n + 7));
+        const room = S.rooms[n];
+        if (!room || room.chaseTriggered) return;
+        if (!S.dead) {
+            warpTo(n, slot || 0, room.z0 - 10.6, 0);
+            sub('🧑‍🍳 A teammate woke ALEX — everyone was pulled into the hallway!', 3.5);
+        }
+        startChase(room);
+    }
+    function remoteChaseEnd() {
+        const c = S.chase;
+        if (c && c.phase !== 'slam' && c.phase !== 'done') { c.phase = 'slam'; c.slamT = 0.55; }
+    }
+    function remoteAlex(type, d) {
+        const c = S.chase;
+        if (!c || c.phase !== 'run') return;
+        if (type === 'alexHit') { c.z += 14; c.stun = 1.2; }
+        else if (type === 'alexStun') { c.stun = d.s || 6.5; c.z += 10; }
+    }
+    function remoteLib(n, slot) {
+        const L0 = S.library;
+        if (L0 && L0.started && L0.room && L0.room.n === n) return;
+        ensureRooms(Math.min(TOTAL_ROOMS, n + 2));
+        const room = S.rooms[n];
+        if (!room) return;
+        if (!S.dead) {
+            warpTo(n, slot || 0, room.z0 - 3.4, 0);
+            room.sealPending = true;
+            if (room.kind === 'boss') achieve('boss', 'The Final Chapter'); else achieve('library', 'Shhh… The Library');
+        }
+        room.entered = true;
+        startLibrary(room);
+    }
+    function remoteLibOpen(n) {
+        const room = S.rooms[n], L = (room && room.lib) || S.library;
+        if (!room || !L || L.unlocked) return;
+        L.unlocked = true;
+        const d = room.door;
+        if (d) { d.padlock = false; d.locked = false; d.open = true; }
+        if (S.padOpen) hidePad();
+        sub('🔓 Your team cracked the padlock! RUN FOR THE EXIT!', 4);
+        if (S.library === L && S.cur === n && !S.dead) libFinale();
+        else if (L.mrc) { L.finale = true; L.mrc.state = 'hunt'; }
+    }
+    function remoteFuse(total) {
+        const L = S.library;
+        if (!L || !L.boss) return;
+        if (total <= L.fuses) return;
+        for (let i = L.fuses; i < total; i++) { const sl = L.slots[i]; if (sl) sl.material = mat(0x16a34a, 0x0a5a1a); }
+        L.fuses = total;
+        if (L.fuses >= 2 && L.angry < 1.15) { L.angry = 1.15; L.ear = 1.25; }
+        if (L.fuses >= L.need) { L.angry = 1.28; L.ear = 1.4; }
+        sub('🔌 Fuse inserted by a teammate (' + L.fuses + ' / ' + L.need + ')', 3);
+        updCode();
+    }
+    function remotePower() {
+        const L = S.library;
+        if (!L || !L.boss || L.powered) return;
+        closeBreaker(false);
+        L.powered = true;
+        const room = L.room, d = room && room.door;
+        if (d) { d.bossLock = false; d.locked = false; d.open = true; }
+        if (room) { room.lamps.forEach((l) => { l.base = 1.1; }); if (room.exitSign) room.exitSign.visible = false; }
+        sound.drUnlock();
+        if (!S.dead && room && S.cur === room.n) libFinale();
+        else if (L.mrc) { L.finale = true; }
+    }
+    function mpRespawn(n, x, z) {
+        if (!S.dead) return false;
+        S.dead = false;
+        const P = S.P;
+        P.hp = 60; updHP();
+        setHands(true);
+        if (!warpTo(n, x, z, 0)) { S.dead = true; return false; }
+        S.god = true;
+        setTimeout(() => { if (S.P === P) S.god = false; }, 3000);
+        const rv = $('pl-revive'); if (rv) { rv.style.opacity = 1; setTimeout(() => { rv.style.opacity = 0; }, 900); }
+        sound.drAchv();
+        sub('✨ You are back! Stick with your team this time. (3 s of protection)', 4);
+        lockPointer();
+        mpEmit('respawn', { n: n });
+        return true;
+    }
+
     window.__doorsApi = {
         cine: { skip: endCine, state: CINE, hb: HB, hbPress: hbPress, play: playCine }, readBook: readBook, readNote: readNote, throwBook: throwBook, libFinale: libFinale,
         invTake: invTake, invCount: invCount, renderHotbar: renderHotbar, achieve: achieve, addInter: addInter, equipped: equipped, hurt2: null,
         shatter: shatterWall, hide: enterHide, unhide: exitHide,
-        CH1: CH1, CH2: CH2, CH3: CH3, CH4: CH4, TOTAL: TOTAL_ROOMS, bossBreaker: bossBreaker, submitBreaker: submitBreaker, BRK: BRK, S: S, dk: dk, DEATHS: DEATHS, makeAlex: makeAlex, makeMrsC: makeMrsC, hurt: hurt, sub: sub, teleport: teleport, setGen: setGen, smash: smashAt,
+        get CH1() { return CH1; }, CH2: CH2, get CH3() { return CH3; }, CH4: CH4, TOTAL: TOTAL_ROOMS, bossBreaker: bossBreaker, submitBreaker: submitBreaker, BRK: BRK, S: S, dk: dk, DEATHS: DEATHS, makeAlex: makeAlex, makeMrsC: makeMrsC, hurt: hurt, sub: sub, teleport: teleport, setGen: setGen, smash: smashAt,
         blocked: function (x, z, r) { return !walkable(x, z, r) || hitsCol(x, z, r); },
         setAdmin: function (on) {
             S.admin = on; S.padOpen = on;
@@ -9755,21 +10281,25 @@
         openAll: function () { S.unlockAll = true; for (const k in S.rooms) { const d = S.rooms[k].door; if (d) { d.locked = false; d.padlock = false; d.jammed = false; if (d.lockMesh) d.lockMesh.visible = false; d.open = true; } } if (S.library) S.library.unlocked = true; },
         skipChase: function () { const c = S.chase; if (!c) return false; const n = c.lastN + 1; teleport(n); return true; },
         flicker: function (t) { S.flicker = Math.max(S.flicker, t || 3); },
-        invAdd: invAdd, updGold: updGold, updHP: updHP, updEntsList: updEntsList, lockPointer: lockPointer
+        invAdd: invAdd, updGold: updGold, updHP: updHP, updEntsList: updEntsList, lockPointer: lockPointer,
+        withSeed: withSeed, beginRun: function () { beginRun(); }, warpTo: warpTo, findInter: findInter, applyUse: applyUse, applyDoor: applyDoor, applyUnlock: applyUnlock,
+        remoteRush: remoteRush, remoteEyes: remoteEyes, remoteChase: remoteChase, remoteChaseEnd: remoteChaseEnd, remoteAlex: remoteAlex, mcRemote: mcRemote,
+        remoteLib: remoteLib, remoteLibOpen: remoteLibOpen, remoteFuse: remoteFuse, remotePower: remotePower, respawn: mpRespawn, setPause: setPause,
+        runStatsLine: runStatsLine, lookDir: lookDir, walkable: walkable, hitsCol: hitsCol, ITEM_DEFS: ITEM_DEFS, pad3: pad3, TOTAL_ROOMS: TOTAL_ROOMS, HB: HB, CINE: CINE
     };
 
     // ---------- input ----------
     const KEYMAP = { KeyW: 'w', ArrowUp: 'w', KeyS: 's', ArrowDown: 's', KeyA: 'a', ArrowLeft: 'a', KeyD: 'd', ArrowRight: 'd', ShiftLeft: 'ctrl', ShiftRight: 'ctrl', KeyC: 'ctrl', Space: 'shift' };
     window.addEventListener('keydown', (e) => {
         if (!S.active || !S.running) return;
-        if (S.padOpen) return;
         const c = e.code;
+        if ((c === 'KeyP' || c === 'Escape') && !e.repeat && !S.padOpen && !S.chatOpen) { setPause(!S.paused); return; }
+        if (S.padOpen || (S.paused && mpOn()) || S.chatOpen) return;
         if (KEYMAP[c]) { dk[KEYMAP[c]] = 1; if (c.indexOf('Arrow') === 0) e.preventDefault(); }
         if (c === 'Space') e.preventDefault();
         if (e.repeat) return;
         if (c === 'KeyE') interact();
         else if (c === 'KeyF') useItem();
-        else if (c === 'KeyP' || c === 'Escape') setPause(!S.paused);
         else if (c.indexOf('Digit') === 0) {
             const n = +c.slice(5) - 1;
             if (n >= 0 && n < 8 && S.inv[n]) { S.sel = n; S.hotDirty = true; if (S.inv[n].id !== 'flashlight') S.flashOn = false; }
@@ -9861,7 +10391,8 @@
 
     function tick(dt) {
         const P = S.P;
-        if (!S.running || S.paused || S.dead || S.won || S.admin) {
+        if (S.running && S.dead && !S.won && mpOn()) { spectTick(dt); return; }
+        if (!S.running || (S.paused && !mpOn()) || S.dead || S.won || S.admin) {
             setCamera();
             updateLights();
             return;
@@ -9904,6 +10435,12 @@
         refreshRoomVis();
         const room = S.rooms[S.cur];
         if (room && room.isChaseStart && !room.chaseTriggered && P.z < room.z0 - 10) startChase(room);
+        // the Janitor: too long in one ordinary room (locked-door rooms get extra time to find the key)
+        if (room && (room.kind === 'normal' || room.kind === 'hallway') && room.n >= 5 && !S.gen && !S.god) {
+            const lim = (room.hasLockedDoor && room.door.locked ? 210 : 120) * (S.diff === 'CHILL' ? 1.5 : S.diff === 'DETENTION' ? 0.8 : 1);
+            if (S.timeInRoom > lim - 18 && !room.janWarn) { room.janWarn = true; sub('You hear a mop squeaking somewhere… and keys jingling. Better keep moving.', 4); sound.tone('triangle', 1400, 1000, 0, 0.15, 0.04); }
+            if (S.timeInRoom > lim && !room.janDone && !busy()) { room.janDone = true; startJanitor(room); }
+        }
         // library exit -> win
         if (S.cur === TOTAL_ROOMS && room && room.door && room.door.open && P.z < room.z1 + 0.25) win();
         // the Library and Room 100 lock you in behind you
@@ -9953,7 +10490,7 @@
     }
 
     function updEntsList(dt) {
-        const UPD = { rush: updRush, ambush: updRush, screech: updScreech, eyes: updEyes, halt: updHalt };
+        const UPD = { rush: updRush, ambush: updRush, screech: updScreech, eyes: updEyes, halt: updHalt, janitor: updJanitor };
         for (let i = S.ents.length - 1; i >= 0; i--) {
             const e = S.ents[i];
             try { UPD[e.type](e, dt); } catch (err) { console.error('DOORS entity', e.type, err); e.dead = true; }
@@ -10683,6 +11220,7 @@
         if (e.code !== 'Tab') return;
         const m = curMode();
         if (m === 'none') return;
+        if (m === 'doors' && window.__mpHooks && window.__mpHooks.on && window.__mpHooks.on()) { e.preventDefault(); e.stopPropagation(); try { A().sub('🔧 The admin panel is turned off in multiplayer (no cheating on your friends 😉).', 2.5); } catch (er) { /* ignore */ } return; }
         if (!open) {
             if (m === 'doors') { const S = A().S; if (!S.running || S.dead || S.won || S.paused) return; }
             if (m === 'main' && paused) return;
@@ -10723,6 +11261,7 @@
         get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
         set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
     };
+    const CONSOLE = /Xbox|PlayStation|Nintendo|Android|iPhone|iPad|Mobile|Silk|CrKey|SmartTV|Tizen|WebOS/i.test(navigator.userAgent || '');
     const snd = () => (typeof sound !== 'undefined' ? sound : null);
     function beep(type, f0, f1, delay, dur, vol) { try { const s = snd(); if (s && s.tone) s.tone(type, f0, f1, delay, dur, vol); } catch (e) { /* ignore */ } }
     function sfx(name, a) { try { const s = snd(); if (s && s[name]) s[name](a); } catch (e) { /* ignore */ } }
@@ -10760,8 +11299,11 @@
     let cart = {};
     const stats = Object.assign({ runs: 0, escapes: 0, deaths: 0, bestTime: 0, knobsTotal: 0, killers: {}, bestRoom: 0 }, LS.get('doors_stats', {}));
     let knobs = LS.get('doors_knobs', 0);
-    function modOn(id) { return !!mods[id]; }
-    function modBonus() { let b = 0; MODS.forEach((m) => { if (mods[m.id]) b += m.bonus; }); return b; }
+    // in multiplayer the host's modifiers apply to everyone (window.__mpMods)
+    function curMods() { return window.__mpMods || mods; }
+    function modOn(id) { return !!curMods()[id]; }
+    function modBonus() { let b = 0; const cm = curMods(); MODS.forEach((m) => { if (cm[m.id]) b += m.bonus; }); return b; }
+    window.__plusMods = { list: MODS, local: mods, save: () => LS.set('doors_mods', mods), render: () => renderPre() };
 
     // ---------------------------------------------------------------
     // CSS + DOM
@@ -10833,13 +11375,19 @@
     function renderPre() {
         const ml = $('pl-modlist'), sl = $('pl-shoplist');
         if (!ml || !sl) return;
-        ml.innerHTML = MODS.map((m) => '<button class="pl-mod' + (mods[m.id] ? ' on' : '') + '" data-mod="' + m.id + '"><span style="font-size:18px">' + m.icon + '</span><span>' + m.name + '<small>' + m.desc + '</small></span><span class="pl-tag">' + (m.bonus >= 0 ? '+' : '') + m.bonus + '% 🔘</span></button>').join('');
+        const cm = curMods(), mpLocked = !!window.__mpMods && !window.__mpIsHost;
+        ml.innerHTML = (mpLocked ? '<div style="font-size:11px;opacity:.7;margin-bottom:4px">The host picks modifiers.</div>' : '') + MODS.map((m) => '<button class="pl-mod' + (cm[m.id] ? ' on' : '') + '" data-mod="' + m.id + '"' + (mpLocked ? ' disabled style="opacity:.75;cursor:default"' : '') + '><span style="font-size:18px">' + m.icon + '</span><span>' + m.name + '<small>' + m.desc + '</small></span><span class="pl-tag">' + (m.bonus >= 0 ? '+' : '') + m.bonus + '% 🔘</span></button>').join('');
         sl.innerHTML = PRESHOP.map((p) => '<button class="pl-buy' + (cart[p.id] ? ' on' : '') + '" data-buy="' + p.id + '"><span>' + p.name + '</span><span class="pl-tag">' + p.price + ' 🔘</span></button>').join('');
         const spent = cartCost();
         $('pl-knobs').textContent = '🔘 ' + (knobs - spent);
         const b = modBonus();
         $('pl-sum').innerHTML = 'Knob bonus this run: <b>' + (b >= 0 ? '+' : '') + b + '%</b> • Knobs are earned at the end of every run (more for deeper rooms and escaping).';
-        ml.querySelectorAll('[data-mod]').forEach((el) => { el.onclick = () => { const id = el.dataset.mod; mods[id] = !mods[id]; LS.set('doors_mods', mods); beep('square', 500, 700, 0, 0.05, 0.05); renderPre(); }; });
+        ml.querySelectorAll('[data-mod]').forEach((el) => { el.onclick = () => {
+            if (mpLocked) return;
+            const id = el.dataset.mod; mods[id] = !mods[id]; LS.set('doors_mods', mods); beep('square', 500, 700, 0, 0.05, 0.05);
+            if (window.__mpMods && window.__mpOnModsChanged) window.__mpOnModsChanged(Object.assign({}, mods));
+            renderPre();
+        }; });
         sl.querySelectorAll('[data-buy]').forEach((el) => {
             el.onclick = () => {
                 const p = PRESHOP.find((q) => q.id === el.dataset.buy);
@@ -10868,14 +11416,14 @@
     const ACH_NAMES = {
         rich: 'Lunch Money', library: 'Shhh… The Library', jeff: 'Retail Therapy', shopper: 'Big Spender', bookworm: 'Bookworm', escape: 'Escaped The Hotel!',
         shatter: 'Wall? What Wall?', giggle: 'Tickle Fight', dupe: 'Wrong Number', revive: 'Second Chance', flare: 'Light It Up', calm: 'Time Out',
-        vend: 'Snack Attack', power: 'Let There Be Light', boss: 'The Final Chapter', decoy: 'Decoy Reader', heart: 'Nerves Of Steel', flawless: 'Not A Scratch', chase1: 'Run, Chef, Run', chase2: 'Alex 2: Slime Harder', cross: 'Holy Hall Pass', half: 'Halfway There', floor2: 'Pest Control', glass: 'Glass Cannon', tiny: 'Smol Escape', knobs: 'Knob Hoarder'
+        vend: 'Snack Attack', janitor: 'Mind The Wet Floor', teamwork: 'Better Together', reunion: 'Back From The Dead', power: 'Let There Be Light', boss: 'The Final Chapter', decoy: 'Decoy Reader', heart: 'Nerves Of Steel', flawless: 'Not A Scratch', chase1: 'Run, Chef, Run', chase2: 'Alex 2: Slime Harder', cross: 'Holy Hall Pass', half: 'Halfway There', floor2: 'Pest Control', glass: 'Glass Cannon', tiny: 'Smol Escape', knobs: 'Knob Hoarder'
     };
     function renderPause() {
         const S = A().S, el = $('pl-pausex');
         if (!el || !S) return;
         const got = LS.get('doors_achv', {});
         const ids = Object.keys(got);
-        const active = MODS.filter((m) => mods[m.id]).map((m) => m.icon + ' ' + m.name).join(', ') || 'none';
+        const active = MODS.filter((m) => curMods()[m.id]).map((m) => m.icon + ' ' + m.name).join(', ') || 'none';
         el.innerHTML = '<div class="pl-opt">🖱️ Mouse sensitivity <input id="pl-psens" type="range" min="0.3" max="2.5" step="0.05" value="' + settings.sens + '"><span id="pl-psensv">' + (+settings.sens).toFixed(2) + '</span></div>' +
             '<div class="pl-opt">🎵 Music <input id="pl-pmus" type="range" min="0" max="100" step="1" value="' + Math.round(settings.musicVol * 100) + '"></div>' +
             '<div class="pl-opt">🖥️ Graphics <select id="pl-pgfx">' + ['auto', 'low', 'medium', 'high'].map((q) => '<option value="' + q + '"' + (settings.quality === q ? ' selected' : '') + '>' + q.toUpperCase() + '</option>').join('') + '</select> <small style="opacity:.6">(lights change next run)</small></div>' +
@@ -11076,10 +11624,10 @@
         if (modOn('lightsout')) { if (!A().invCount('flashlight')) A().invAdd('flashlight', 1); A().invAdd('battery', 1); }
         if (modOn('glassjaw')) { S.P.hp = 40; A().updHP(); }
         // already-built rooms (lobby to room 2) get darkness too
-        if (modOn('lightsout')) for (const k in S.rooms) { const r = S.rooms[k]; if (r.n >= 1 && (r.kind === 'normal' || r.kind === 'hallway') && Math.random() < 0.85) darken(r); }
+        if (modOn('lightsout')) for (const k in S.rooms) { const r = S.rooms[k]; if (r.n >= 1 && (r.kind === 'normal' || r.kind === 'hallway') && !r.dark) darken(r); }
         pendingRush = null; giggleOn = null; mash = 0; iframes = 0; revivedThisRun = 0; lastGold = S.gold; extraWarn = 0; prevGod = false;
         stats.runs++; LS.set('doors_stats', stats);
-        $('pl-mods').textContent = MODS.filter((m) => mods[m.id]).map((m) => m.icon).join(' ');
+        $('pl-mods').textContent = MODS.filter((m) => curMods()[m.id]).map((m) => m.icon).join(' ');
         $('pl-giggle').style.display = 'none';
         try { makeDust(S); } catch (e) { dust = null; }
         S.hotDirty = true;
@@ -11092,7 +11640,7 @@
             beep('triangle', 520, 1040, 0, 0.3, 0.07); beep('triangle', 780, 1560, 0.15, 0.3, 0.06);
             if (room.n === 50) A().achieve('half', 'Halfway There');
         }
-        if (modOn('rushhour') && !room.entered && room.n >= 4 && room.kind !== 'jeff' && room.kind !== 'library' && !room.isChase && !room.isChaseStart && Math.random() < 0.38) pendingRush = { room: room, t: rnd(1.5, 4) };
+        if (modOn('rushhour') && !room.entered && room.mpClaim !== false && room.n >= 4 && room.kind !== 'jeff' && room.kind !== 'library' && !room.isChase && !room.isChaseStart && Math.random() < 0.38) pendingRush = { room: room, t: rnd(1.5, 4) };
         if (room.pl && room.pl.giggles && room.pl.giggles.some((g) => g.state === 'ceil') && !room.plGigHint) {
             room.plGigHint = true;
             setTimeout(() => { if (A().S.cur === room.n) A().sub(pick(['You hear giggling above you…', 'Something on the ceiling just snickered.', 'Hehehe… (that was not you)']), 3); }, 1200);
@@ -11412,7 +11960,6 @@
     // ---------------------------------------------------------------
     // Graphics quality + dynamic resolution + crash recovery
     // ---------------------------------------------------------------
-    const CONSOLE = /Xbox|PlayStation|Nintendo|Android|iPhone|iPad|Mobile|Silk|CrKey|SmartTV|Tizen|WebOS/i.test(navigator.userAgent || '');
     function gfxQ() { let q = settings.quality || 'auto'; if (q === 'auto') q = (CONSOLE || window.__gfxLost) ? 'low' : 'high'; return q; }
     window.__gfxQ = gfxQ;
     const dpr = () => (window.devicePixelRatio || 1);
@@ -11496,6 +12043,1488 @@
     window.__plusDbg = { mods: mods, stats: stats, setCart: (c) => { cart = c; }, giggle: () => giggleOn, mash: mashKey };
 })();
 
+    </script>
+    <script id="doors-mp">
+// ================================================================
+// DOORS MULTIPLAYER (Firebase Realtime Database, or a local test mode)
+// ----------------------------------------------------------------
+//  * Paste your Firebase web config into FIREBASE_CONFIG below
+//    (or paste it in-game: DOORS -> PLAY WITH FRIENDS -> Firebase setup).
+//  * See README.md for the full step-by-step setup.
+// ================================================================
+(function () {
+    'use strict';
+
+    // ===================== PUT YOUR FIREBASE CONFIG HERE =====================
+    // Example:
+    // const FIREBASE_CONFIG = {
+    //     apiKey: "AIza...",
+    //     authDomain: "my-doors.firebaseapp.com",
+    //     databaseURL: "https://my-doors-default-rtdb.firebaseio.com",
+    //     projectId: "my-doors",
+    //     storageBucket: "my-doors.appspot.com",
+    //     messagingSenderId: "1234567890",
+    //     appId: "1:1234567890:web:abcdef"
+    // };
+    const FIREBASE_CONFIG = null;
+    // =========================================================================
+
+    const FB_VER = '10.12.2';
+    const ROOT = 'doorsMP/v1/lobbies';
+    const SEND_HZ = 10;
+    const A = () => window.__doorsApi;
+    const S = () => window.__doorsState;
+    const H = window.__mpHooks = window.__mpHooks || {};
+    const $ = (id) => document.getElementById(id);
+    const LS = {
+        get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+        set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+    };
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const esc = (t) => String(t === undefined || t === null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const r2 = (v) => Math.round((+v || 0) * 100) / 100;
+    const snd = () => (typeof sound !== 'undefined' ? sound : null);
+    function sfx(name, a, b) { try { const s = snd(); if (s && s[name]) s[name](a, b); } catch (e) { /* ignore */ } }
+    function beep(type, f0, f1, delay, dur, vol) { try { const s = snd(); if (s && s.tone) s.tone(type, f0, f1, delay, dur, vol); } catch (e) { /* ignore */ } }
+    function rid(n) { const C = 'abcdefghijkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < (n || 8); i++) s += C[Math.floor(Math.random() * C.length)]; return s; }
+    function clean(o) { return JSON.parse(JSON.stringify(o, (k, v) => (v === undefined ? null : v))); }
+    function angLerp(a, b, t) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return a + d * t; }
+
+    // ---------------- identity / profile ----------------
+    let PID = null;
+    try { PID = sessionStorage.getItem('doors_mp_pid'); } catch (e) { /* ignore */ }
+    if (!PID) { PID = rid(10); try { sessionStorage.setItem('doors_mp_pid', PID); } catch (e) { /* ignore */ } }
+    const NAME_A = ['Tater', 'Gravy', 'Nugget', 'Pickle', 'Spork', 'Waffle', 'Noodle', 'Biscuit', 'Muffin', 'Taco'];
+    const NAME_B = ['Kid', 'Boss', 'Ninja', 'Runner', 'Hero', 'Gremlin', 'Legend', 'Goblin'];
+    const COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7', '#f97316', '#ec4899', '#14b8a6', '#f5f5f4', '#1f2937'];
+    const SKINS = [0xf1c9a5, 0xe0ac7e, 0xb07a4f, 0x7a4b2b, 0xffe0bd];
+    const HATS = [
+        { id: 'none', icon: '💇', name: 'Hair' }, { id: 'cap', icon: '🧢', name: 'Cap' }, { id: 'beanie', icon: '🧶', name: 'Beanie' },
+        { id: 'chef', icon: '👨‍🍳', name: 'Chef' }, { id: 'crown', icon: '👑', name: 'Crown' }, { id: 'headphones', icon: '🎧', name: 'Headphones' },
+        { id: 'bunny', icon: '🐰', name: 'Bunny' }, { id: 'wizard', icon: '🧙', name: 'Wizard' }
+    ];
+    const prof = Object.assign({
+        name: NAME_A[Math.floor(Math.random() * NAME_A.length)] + NAME_B[Math.floor(Math.random() * NAME_B.length)] + Math.floor(Math.random() * 90 + 10),
+        color: COLORS[Math.floor(Math.random() * 6)], hat: 'cap', skin: 0
+    }, LS.get('doors_mp_profile', {}));
+    function saveProf() { LS.set('doors_mp_profile', prof); }
+
+    // ---------------- config parsing ----------------
+    function parseConfig(txt) {
+        if (!txt) return null;
+        if (typeof txt === 'object') return txt;
+        let t = String(txt);
+        const a = t.indexOf('{'), b = t.lastIndexOf('}');
+        if (a < 0 || b < a) return null;
+        t = t.slice(a, b + 1)
+            .replace(/\/\/[^\n]*/g, '')
+            .replace(/'/g, '"')
+            .replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":')
+            .replace(/,\s*}/g, '}');
+        try {
+            const o = JSON.parse(t);
+            if (!o.databaseURL && o.projectId) o.databaseURL = 'https://' + o.projectId + '-default-rtdb.firebaseio.com';
+            return o.apiKey && o.databaseURL ? o : null;
+        } catch (e) { return null; }
+    }
+    function savedConfig() { return parseConfig(FIREBASE_CONFIG) || parseConfig(LS.get('doors_fb_config', null)); }
+
+    // ================================================================
+    // NETWORK BACKENDS (same tiny API for Firebase and local test mode)
+    // ================================================================
+    function loadScript(src) {
+        return new Promise((res, rej) => {
+            if (document.querySelector('script[data-src="' + src + '"]')) { res(); return; }
+            const s = document.createElement('script');
+            s.src = src; s.async = true; s.dataset.src = src;
+            s.onload = () => res(); s.onerror = () => rej(new Error('Could not download ' + src));
+            document.head.appendChild(s);
+        });
+    }
+    async function makeFirebaseNet(cfg) {
+        await loadScript('https://www.gstatic.com/firebasejs/' + FB_VER + '/firebase-app-compat.js');
+        await loadScript('https://www.gstatic.com/firebasejs/' + FB_VER + '/firebase-database-compat.js');
+        const fb = window.firebase;
+        if (!fb) throw new Error('Firebase did not load');
+        const app = fb.apps.length ? fb.app() : fb.initializeApp(cfg);
+        const db = fb.database(app);
+        let offset = 0;
+        db.ref('.info/serverTimeOffset').on('value', (s) => { offset = s.val() || 0; });
+        await new Promise((res, rej) => {
+            const to = setTimeout(() => rej(new Error('Could not connect to your Firebase Realtime Database. Check the databaseURL.')), 12000);
+            const r = db.ref('.info/connected');
+            const h = r.on('value', (s) => { if (s.val() === true) { clearTimeout(to); r.off('value', h); res(); } });
+        });
+        // make sure the rules let us read + write
+        await db.ref('doorsMP/v1/ping/' + PID).set(Date.now()).catch((e) => { throw new Error('Firebase said: ' + (e && e.message ? e.message : e) + ' — set your Realtime Database rules (see README).'); });
+        db.ref('doorsMP/v1/ping/' + PID).remove();
+        const ref = (p) => db.ref(p);
+        return {
+            kind: 'fire',
+            now: () => Date.now() + offset,
+            set: (p, v) => ref(p).set(clean(v)).catch(netErr),
+            update: (p, v) => ref(p).update(clean(v)).catch(netErr),
+            push: (p, v) => ref(p).push(clean(v)).catch(netErr),
+            remove: (p) => ref(p).remove().catch(netErr),
+            once: (p) => ref(p).once('value').then((s) => s.val()),
+            onValue(p, cb) { const r = ref(p); const h = r.on('value', (s) => cb(s.val())); return () => r.off('value', h); },
+            onChild(p, cbs) {
+                const r = ref(p), hs = [];
+                if (cbs.added) hs.push(['child_added', r.on('child_added', (s) => cbs.added(s.key, s.val()))]);
+                if (cbs.changed) hs.push(['child_changed', r.on('child_changed', (s) => cbs.changed(s.key, s.val()))]);
+                if (cbs.removed) hs.push(['child_removed', r.on('child_removed', (s) => cbs.removed(s.key, s.val()))]);
+                return () => hs.forEach((h) => r.off(h[0], h[1]));
+            },
+            onDisconnectRemove: (p) => { try { ref(p).onDisconnect().remove(); } catch (e) { /* ignore */ } },
+            cancelDisconnect: (p) => { try { ref(p).onDisconnect().cancel(); } catch (e) { /* ignore */ } }
+        };
+    }
+    // Local test mode: every tab of this browser shares one in-memory database via BroadcastChannel.
+    function makeLocalNet() {
+        if (typeof BroadcastChannel === 'undefined') throw new Error('This browser does not support local test mode.');
+        const ch = new BroadcastChannel('doors-mp-local-v1');
+        const me = rid(8);
+        let tree = {};
+        const L = [];
+        const disc = new Set();
+        const seg = (p) => String(p).split('/').filter(Boolean);
+        const cl = (v) => (v === undefined || v === null ? null : JSON.parse(JSON.stringify(v)));
+        function get(p) { let o = tree; for (const k of seg(p)) { if (o === null || typeof o !== 'object') return null; o = o[k]; if (o === undefined) return null; } return o; }
+        function rawSet(p, v) {
+            const ks = seg(p);
+            if (!ks.length) { tree = v || {}; return; }
+            let o = tree;
+            for (let i = 0; i < ks.length - 1; i++) { if (o[ks[i]] === null || typeof o[ks[i]] !== 'object') o[ks[i]] = {}; o = o[ks[i]]; }
+            if (v === null) delete o[ks[ks.length - 1]]; else o[ks[ks.length - 1]] = v;
+        }
+        function childSnap(path, only) {
+            const o = get(path), m = {};
+            if (o && typeof o === 'object') { if (only !== undefined) { if (o[only] !== undefined) m[only] = JSON.stringify(o[only]); } else Object.keys(o).forEach((k) => { m[k] = JSON.stringify(o[k]); }); }
+            return m;
+        }
+        function apply(p, v) {
+            v = cl(v);
+            const ps = seg(p).join('/');
+            const pre = [];
+            L.forEach((l) => {
+                if (l.kind !== 'child') return;
+                const lp = l.path;
+                if (ps.startsWith(lp + '/')) { const key = seg(ps)[seg(lp).length]; pre.push({ l: l, key: key, b: childSnap(lp, key) }); }
+                else if (lp === ps || lp.startsWith(ps + '/') || ps === '') pre.push({ l: l, b: childSnap(lp) });
+            });
+            rawSet(ps, v);
+            pre.forEach((x) => {
+                const a = x.key !== undefined ? childSnap(x.l.path, x.key) : childSnap(x.l.path);
+                const keys = new Set(Object.keys(x.b).concat(Object.keys(a)));
+                keys.forEach((k) => {
+                    if (x.b[k] === undefined && a[k] !== undefined) { if (x.l.cbs.added) x.l.cbs.added(k, JSON.parse(a[k])); }
+                    else if (x.b[k] !== undefined && a[k] === undefined) { if (x.l.cbs.removed) x.l.cbs.removed(k, JSON.parse(x.b[k])); }
+                    else if (x.b[k] !== a[k]) { if (x.l.cbs.changed) x.l.cbs.changed(k, JSON.parse(a[k])); }
+                });
+            });
+            L.forEach((l) => { if (l.kind === 'value' && (ps === l.path || ps.startsWith(l.path + '/') || l.path.startsWith(ps + '/') || ps === '')) l.cb(cl(get(l.path))); });
+        }
+        function write(p, v) { apply(p, v); ch.postMessage({ op: 'set', p: seg(p).join('/'), v: cl(v) }); return Promise.resolve(); }
+        let synced = false;
+        ch.onmessage = (m) => {
+            const d = m.data || {};
+            if (d.op === 'set') apply(d.p, d.v);
+            else if (d.op === 'hello' && d.from !== me) ch.postMessage({ op: 'state', to: d.from, tree: tree });
+            else if (d.op === 'state' && d.to === me && !synced) { synced = true; apply('', d.tree); }
+        };
+        ch.postMessage({ op: 'hello', from: me });
+        const bye = () => { disc.forEach((p) => write(p, null)); };
+        window.addEventListener('pagehide', bye);
+        window.addEventListener('beforeunload', bye);
+        let pushN = 0;
+        return new Promise((res) => setTimeout(() => res({
+            kind: 'local',
+            now: () => Date.now(),
+            set: (p, v) => write(p, v),
+            update: (p, v) => { const cur = get(seg(p).join('/')); const o = Object.assign({}, cur && typeof cur === 'object' ? cur : {}); Object.keys(v).forEach((k) => { if (v[k] === null || v[k] === undefined) delete o[k]; else o[k] = v[k]; }); return write(p, o); },
+            push: (p, v) => { const k = Date.now().toString(36).padStart(9, '0') + (pushN++).toString(36).padStart(4, '0') + rid(4); return write(p + '/' + k, v); },
+            remove: (p) => write(p, null),
+            once: (p) => Promise.resolve(cl(get(p))),
+            onValue(p, cb) { const l = { kind: 'value', path: seg(p).join('/'), cb: cb }; L.push(l); cb(cl(get(l.path))); return () => { const i = L.indexOf(l); if (i >= 0) L.splice(i, 1); }; },
+            onChild(p, cbs) {
+                const l = { kind: 'child', path: seg(p).join('/'), cbs: cbs }; L.push(l);
+                const o = get(l.path); if (o && typeof o === 'object' && cbs.added) Object.keys(o).sort().forEach((k) => cbs.added(k, cl(o[k])));
+                return () => { const i = L.indexOf(l); if (i >= 0) L.splice(i, 1); };
+            },
+            onDisconnectRemove: (p) => { disc.add(seg(p).join('/')); },
+            cancelDisconnect: (p) => { disc.delete(seg(p).join('/')); }
+        }), 350));
+    }
+    function netErr(e) { console.error('MP net', e); toast('⚠️ Network: ' + (e && e.message ? e.message : e)); }
+
+    // ================================================================
+    // STATE
+    // ================================================================
+    const M = {
+        net: null, mode: null, connecting: false, code: null, meta: null, players: {}, remote: {}, unsub: [],
+        inRun: false, runStarted: false, rid: null, queue: [], seen: new Set(),
+        used: new Map(), doors: new Set(), unlocks: new Set(), claimed: new Set(),
+        alexBuf: [], mrcBuf: [], lastSend: 0, lastAlex: 0, lastMrc: 0,
+        spectIdx: 0, ended: false, paid: false, escaped: false, lobbyView: false, joinedAt: 0, err: '', pings: [], countdown: 0, respawnCheck: 0,
+        lastHp: 100, lightPool: []
+    };
+    const base = () => ROOT + '/' + M.code;
+    const now = () => (M.net ? M.net.now() : Date.now());
+    function isHost() { return !!(M.meta && hostId() === PID); }
+    function hostId() {
+        if (!M.meta) return null;
+        if (M.meta.host && M.players[M.meta.host]) return M.meta.host;
+        const ids = Object.keys(M.players).sort((a, b) => ((M.players[a].joinedAt || 0) - (M.players[b].joinedAt || 0)) || (a < b ? -1 : 1));
+        return ids[0] || null;
+    }
+    function nameOf(id) { if (id === PID) return prof.name; const p = M.players[id]; return p ? p.name : 'Someone'; }
+    function colorOf(id) { if (id === PID) return prof.color; const p = M.players[id]; return p ? p.color : '#999'; }
+
+    // ================================================================
+    // UI
+    // ================================================================
+    const css = document.createElement('style');
+    css.textContent = `
+    #mp-panel{position:absolute;left:16px;top:16px;bottom:16px;width:min(410px,94vw);overflow:auto;display:none;pointer-events:auto;background:linear-gradient(180deg,rgba(26,18,8,.96),rgba(12,8,3,.96));border:2px solid #b45309;border-radius:16px;padding:16px 18px;box-shadow:0 0 50px rgba(0,0,0,.9);font-family:Georgia,serif;color:#fde68a;z-index:8}
+    #mp-panel h2{font-size:26px;color:#fbbf24;letter-spacing:2px;margin:0 0 4px}
+    #mp-panel h3{font-size:12px;letter-spacing:2px;color:#fbbf24;margin:12px 0 6px;text-transform:uppercase}
+    #mp-panel .sub{font-size:12px;opacity:.75}
+    #mp-panel input[type=text],#mp-panel textarea{width:100%;padding:7px 9px;border-radius:9px;border:2px solid #78350f;background:#0f0a04;color:#fde68a;font-family:inherit;font-size:14px;pointer-events:auto}
+    #mp-panel textarea{height:90px;font-family:monospace;font-size:11px}
+    .mp-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+    .mp-b{pointer-events:auto;cursor:pointer;padding:8px 13px;border-radius:10px;border:2px solid #fbbf24;background:#78350f;color:#fff;font-weight:bold;font-family:inherit;font-size:13px}
+    .mp-b:hover{background:#b45309}.mp-b:disabled{opacity:.45;cursor:default}
+    .mp-b.blue{background:#1e3a8a;border-color:#93c5fd}.mp-b.blue:hover{background:#1d4ed8}
+    .mp-b.green{background:#14532d;border-color:#4ade80}.mp-b.green:hover{background:#15803d}
+    .mp-b.gray{background:#292524;border-color:#78716c}
+    .mp-b.big{font-size:16px;padding:11px 18px;flex:1}
+    .mp-sw{width:26px;height:26px;border-radius:50%;border:2px solid #000;cursor:pointer;pointer-events:auto}
+    .mp-sw.on{outline:3px solid #fff;outline-offset:1px}
+    .mp-hat{pointer-events:auto;cursor:pointer;padding:4px 6px;border-radius:8px;border:1px solid #57340f;background:#1c1208;font-size:18px}
+    .mp-hat.on{background:#7c2d12;border-color:#fb923c}
+    #mp-code{font-size:34px;font-weight:900;letter-spacing:8px;color:#fff;text-shadow:0 0 14px #f59e0b;cursor:pointer;font-family:monospace}
+    .mp-pl{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:4px 0;border-radius:10px;background:#1c1208;border:1px solid #57340f;font-size:14px}
+    .mp-dot{width:14px;height:14px;border-radius:50%;border:2px solid #000;flex:none}
+    .mp-tag{margin-left:auto;font-size:12px;font-weight:bold}
+    #mp-status{font-size:12px;margin:6px 0;padding:6px 8px;border-radius:8px;background:#0f0a04;border:1px solid #57340f}
+    #mp-status.err{color:#fca5a5;border-color:#7f1d1d}#mp-status.ok{color:#86efac;border-color:#14532d}
+    .mp-diff{pointer-events:auto;cursor:pointer;padding:6px 10px;border-radius:9px;border:1px solid #57340f;background:#1c1208;color:#fde68a;font-family:inherit;font-size:12px;font-weight:bold}
+    .mp-diff.on{background:#7c2d12;border-color:#fb923c;color:#fff}
+    #mp-panel #pl-pre{grid-template-columns:1fr;margin-top:4px}
+    #mp-list{position:absolute;right:18px;top:110px;width:200px;font-size:12px;text-shadow:0 0 6px #000;display:none}
+    #mp-list .r{display:flex;align-items:center;gap:6px;padding:3px 6px;margin-bottom:3px;border-radius:8px;background:rgba(10,6,2,.55);border:1px solid rgba(180,83,9,.35)}
+    #mp-list .hp{height:4px;border-radius:3px;background:#3a1a0a;overflow:hidden;margin-top:2px}#mp-list .hp>div{height:100%}
+    #mp-feed{position:absolute;right:18px;top:300px;width:300px;text-align:right;font-size:13px;pointer-events:none}
+    #mp-feed div{margin:3px 0;padding:4px 9px;border-radius:9px;background:rgba(10,6,2,.7);display:inline-block;float:right;clear:both;transition:opacity .6s}
+    #mp-chat{position:absolute;left:18px;bottom:150px;width:min(360px,60vw);font-size:13px;pointer-events:none}
+    #mp-chatlog div{margin:2px 0;padding:3px 8px;border-radius:8px;background:rgba(10,6,2,.6);transition:opacity .8s;word-wrap:break-word}
+    #mp-chatin{display:none;width:100%;margin-top:4px;padding:7px 10px;border-radius:9px;border:2px solid #fbbf24;background:rgba(15,10,4,.92);color:#fff;font-family:inherit;font-size:14px;pointer-events:auto}
+    #mp-count{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;pointer-events:none;z-index:7}
+    #mp-count .n{font-size:min(30vw,200px);font-weight:900;color:#fff;text-shadow:0 0 40px #f59e0b,0 0 8px #000}
+    #mp-count .t{font-size:20px;letter-spacing:4px;color:#fde68a;text-shadow:0 0 8px #000}
+    #mp-dead{position:absolute;left:0;right:0;top:16%;text-align:center;display:none;pointer-events:none;z-index:4}
+    #mp-dead .h{font-size:min(10vw,64px);font-weight:900;color:#ef4444;letter-spacing:6px;text-shadow:0 0 24px #000}
+    #mp-dead .q{font-size:17px;font-style:italic;color:#fff7d6;text-shadow:0 0 8px #000;margin-top:4px}
+    #mp-dead .s{font-size:14px;color:#fde68a;margin-top:10px;text-shadow:0 0 8px #000}
+    #mp-spect{position:absolute;left:50%;bottom:90px;transform:translateX(-50%);display:none;padding:8px 16px;border-radius:12px;background:rgba(10,6,2,.75);border:1px solid #b45309;font-size:14px;text-align:center;pointer-events:none}
+    #mp-end{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);pointer-events:auto;z-index:9}
+    #mp-end .dr-card{max-width:560px}
+    #mp-end table{width:100%;font-size:14px;margin:10px 0;border-collapse:collapse}
+    #mp-end td{padding:5px 6px;border-bottom:1px solid #3a2410;text-align:left}
+    #mp-toast{position:absolute;left:50%;top:70px;transform:translateX(-50%);padding:8px 16px;border-radius:10px;background:rgba(20,12,4,.95);border:1px solid #fbbf24;font-size:14px;display:none;z-index:12;pointer-events:none}
+    .mp-keys{font-size:11px;opacity:.75;line-height:1.6}
+    #dr-root.mp-lobby > *:not(#mp-panel):not(#mp-toast):not(#mp-feed):not(#dr-dark):not(#pl-vig){visibility:hidden}
+    `;
+    document.head.appendChild(css);
+    const drRoot = $('dr-root');
+    function addEl(html) { const d = document.createElement('div'); d.innerHTML = html; const el = d.firstElementChild; drRoot.appendChild(el); return el; }
+    const panel = addEl('<div id="mp-panel"></div>');
+    addEl('<div id="mp-list"></div>');
+    addEl('<div id="mp-feed"></div>');
+    addEl('<div id="mp-chat"><div id="mp-chatlog"></div><input id="mp-chatin" maxlength="120" placeholder="Say something… (Enter to send, Esc to cancel)"></div>');
+    addEl('<div id="mp-count"><div class="t">THE HOTEL OPENS IN</div><div class="n">3</div></div>');
+    addEl('<div id="mp-dead"><div class="h">YOU DIED</div><div class="q"></div><div class="s"></div></div>');
+    addEl('<div id="mp-spect"></div>');
+    addEl('<div id="mp-end"><div class="dr-card"><h2 id="mp-endt">RUN OVER</h2><p id="mp-endl"></p><table id="mp-endtab"></table><p id="mp-ends" style="font-size:13px"></p><div id="mp-endb"></div></div></div>');
+    addEl('<div id="mp-toast"></div>');
+    panel.addEventListener('keydown', (e) => e.stopPropagation());
+    let toastT = null;
+    function toast(t, secs) {
+        const el = $('mp-toast'); if (!el) return;
+        el.textContent = t; el.style.display = 'block';
+        clearTimeout(toastT); toastT = setTimeout(() => { el.style.display = 'none'; }, (secs || 3) * 1000);
+    }
+    function feed(html, color) {
+        const box = $('mp-feed'); if (!box) return;
+        const d = document.createElement('div');
+        d.innerHTML = html;
+        if (color) d.style.borderLeft = '4px solid ' + color;
+        box.appendChild(d);
+        while (box.children.length > 6) box.removeChild(box.firstChild);
+        setTimeout(() => { d.style.opacity = 0; }, 7000);
+        setTimeout(() => { if (d.parentNode) d.parentNode.removeChild(d); }, 7800);
+    }
+    function chatLine(id, text) {
+        const log = $('mp-chatlog'); if (!log) return;
+        const d = document.createElement('div');
+        d.innerHTML = '<b style="color:' + esc(colorOf(id)) + '">' + esc(nameOf(id)) + ':</b> ' + esc(text);
+        log.appendChild(d);
+        while (log.children.length > 8) log.removeChild(log.firstChild);
+        setTimeout(() => { d.style.opacity = 0; }, 12000);
+        setTimeout(() => { if (d.parentNode) d.parentNode.removeChild(d); }, 13000);
+    }
+
+    // ---------------- lobby panel ----------------
+    let preHome = null;
+    function grabPreShop(on) {
+        const pre = $('pl-pre'), sum = $('pl-sum');
+        if (!pre) return;
+        if (on) {
+            if (!preHome) preHome = { parent: pre.parentNode, next: pre.nextSibling };
+            const slot = $('mp-preslot');
+            if (slot && pre.parentNode !== slot) { slot.appendChild(pre); if (sum) slot.appendChild(sum); }
+            try { if (window.__plusMods) window.__plusMods.render(); } catch (e) { /* ignore */ }
+        } else if (preHome && pre.parentNode !== preHome.parent) {
+            preHome.parent.insertBefore(pre, preHome.next);
+            if (sum) preHome.parent.insertBefore(sum, pre.nextSibling);
+            try { if (window.__plusMods) window.__plusMods.render(); } catch (e) { /* ignore */ }
+        }
+    }
+    function renderPanel() {
+        if (drRoot) drRoot.classList.toggle('mp-lobby', !!M.lobbyView);
+        if (!M.lobbyView) { panel.style.display = 'none'; return; }
+        panel.style.display = 'block';
+        const cfgOk = !!savedConfig();
+        let h = '<h2>👥 PLAY WITH FRIENDS</h2><div class="sub">Everyone gets the same hotel. Chases and the Library pull the whole team in. Dead players spectate and respawn when the team pushes 2 rooms further.</div>';
+        h += '<div id="mp-status" class="' + (M.err ? 'err' : M.net ? 'ok' : '') + '">' + (M.err ? '⚠️ ' + esc(M.err) : M.net ? (M.net.kind === 'fire' ? '🟢 Connected to Firebase' : '🧪 Local test mode (only tabs in this browser)') : (M.connecting ? '⏳ Connecting…' : (cfgOk ? '🔥 Firebase config found — press ONLINE to connect.' : '🔥 Firebase is not set up yet. Paste your config below (see README.md), or try Local test mode.'))) + '</div>';
+        // profile
+        h += '<h3>Your look</h3><div class="mp-row"><input type="text" id="mp-name" maxlength="16" value="' + esc(prof.name) + '" style="flex:1"></div>';
+        h += '<div class="mp-row" style="margin-top:6px">' + COLORS.map((c) => '<div class="mp-sw' + (prof.color === c ? ' on' : '') + '" data-c="' + c + '" style="background:' + c + '"></div>').join('') + '</div>';
+        h += '<div class="mp-row" style="margin-top:6px">' + HATS.map((x) => '<span class="mp-hat' + (prof.hat === x.id ? ' on' : '') + '" data-h="' + x.id + '" title="' + x.name + '">' + x.icon + '</span>').join('') + '</div>';
+        h += '<div class="mp-row" style="margin-top:6px">' + SKINS.map((c, i) => '<div class="mp-sw' + (prof.skin === i ? ' on' : '') + '" data-s="' + i + '" style="background:#' + c.toString(16).padStart(6, '0') + '"></div>').join('') + '</div>';
+        if (!M.code) {
+            if (!M.net) {
+                h += '<h3>Connect</h3><div class="mp-row"><button class="mp-b blue big" id="mp-online"' + (cfgOk && !M.connecting ? '' : ' disabled') + '>🌐 ONLINE</button><button class="mp-b gray big" id="mp-local"' + (M.connecting ? ' disabled' : '') + '>🧪 LOCAL TEST</button></div>';
+                h += '<h3>Firebase setup</h3><div class="sub">Paste the <b>firebaseConfig</b> from your Firebase project settings (it is saved on this computer only).</div><textarea id="mp-cfg" placeholder="const firebaseConfig = { apiKey: ..., databaseURL: ..., ... };">' + esc(LS.get('doors_fb_config', '') || '') + '</textarea>' +
+                    '<div class="mp-row" style="margin-top:6px"><button class="mp-b" id="mp-cfgsave">💾 SAVE CONFIG</button>' + (LS.get('doors_fb_config', '') ? '<button class="mp-b gray" id="mp-cfgclr">🗑️ CLEAR</button>' : '') + '</div>';
+            } else {
+                h += '<h3>Lobby</h3><div class="mp-row"><button class="mp-b green big" id="mp-create">✨ CREATE LOBBY</button></div>' +
+                    '<div class="mp-row" style="margin-top:8px"><input type="text" id="mp-join" maxlength="5" placeholder="CODE" style="flex:1;text-transform:uppercase;font-family:monospace;letter-spacing:4px;font-size:18px"><button class="mp-b blue" id="mp-joinb">JOIN</button></div>' +
+                    '<div class="mp-row" style="margin-top:8px"><button class="mp-b gray" id="mp-disc">⏏ Disconnect</button></div>';
+            }
+        } else {
+            const host = isHost(), meta = M.meta || {}, ids = sortedIds();
+            h += '<h3>Lobby code (tap to copy)</h3><div id="mp-code" title="Copy">' + esc(M.code) + '</div><div class="sub">Send this code to your friends. They open DOORS → PLAY WITH FRIENDS → JOIN.</div>';
+            h += '<h3>Players (' + ids.length + ')</h3>' + ids.map((id) => {
+                const p = id === PID ? Object.assign({}, M.players[id] || {}, prof) : (M.players[id] || {});
+                const hat = HATS.find((x) => x.id === p.hat) || HATS[0];
+                return '<div class="mp-pl"><span class="mp-dot" style="background:' + esc(p.color) + '"></span>' + hat.icon + ' <b>' + esc(p.name) + '</b>' + (id === PID ? ' <span class="sub">(you)</span>' : '') +
+                    '<span class="mp-tag">' + (id === hostId() ? '👑 HOST' : (p.ready ? '<span style="color:#4ade80">✔ READY</span>' : '<span style="opacity:.6">…</span>')) + '</span></div>';
+            }).join('');
+            if (meta.state === 'playing' && !M.inRun) h += '<div id="mp-status">⏳ A run is in progress. You will join the next one when the host returns to the lobby.</div>';
+            h += '<h3>Difficulty' + (host ? '' : ' (host picks)') + '</h3><div class="mp-row">' + ['CHILL', 'NORMAL', 'DETENTION'].map((d) => '<button class="mp-diff' + ((meta.diff || 'NORMAL') === d ? ' on' : '') + '" data-d="' + d + '"' + (host ? '' : ' disabled') + '>' + ({ CHILL: '😌 CHILL', NORMAL: '🙂 NORMAL', DETENTION: '😈 DETENTION' })[d] + '</button>').join('') + '</div>';
+            h += '<h3>Modifiers + your pre-run shop</h3><div id="mp-preslot"></div>';
+            h += '<div class="mp-row" style="margin-top:12px">' + (host
+                ? '<button class="mp-b green big" id="mp-start">▶ START RUN (' + ids.filter((id) => id === PID || (M.players[id] && M.players[id].ready)).length + '/' + ids.length + ' ready)</button>'
+                : '<button class="mp-b ' + (M.players[PID] && M.players[PID].ready ? 'gray' : 'green') + ' big" id="mp-ready">' + (M.players[PID] && M.players[PID].ready ? '✖ NOT READY' : '✔ READY') + '</button>') + '</div>';
+            h += '<div class="mp-row" style="margin-top:8px"><button class="mp-b gray" id="mp-leave">🚪 LEAVE LOBBY</button></div>';
+            h += '<h3>Controls</h3><div class="mp-keys"><b>T</b> chat • <b>Q</b> ping what you look at • <b>G</b> wave • dead? <b>← →</b> or <b>click</b> to switch who you spectate.<br>The hotel does not pause in multiplayer. Only one person fits in each hiding spot!</div>';
+        }
+        h += '<div class="mp-row" style="margin-top:14px"><button class="mp-b gray" id="mp-back">⬅ BACK TO SOLO</button></div>';
+        panel.innerHTML = h;
+        bindPanel();
+        if (M.code) grabPreShop(true);
+    }
+    function bindPanel() {
+        const on = (id, f) => { const el = $(id); if (el) el.onclick = f; };
+        const nm = $('mp-name');
+        if (nm) nm.onchange = nm.oninput = () => { prof.name = (nm.value || '').replace(/[<>]/g, '').slice(0, 16) || 'Player'; saveProf(); pushProfile(); refreshLineup(); };
+        panel.querySelectorAll('[data-c]').forEach((el) => { el.onclick = () => { prof.color = el.dataset.c; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); }; });
+        panel.querySelectorAll('[data-h]').forEach((el) => { el.onclick = () => { prof.hat = el.dataset.h; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); }; });
+        panel.querySelectorAll('[data-s]').forEach((el) => { el.onclick = () => { prof.skin = +el.dataset.s; saveProf(); pushProfile(); renderPanel(); refreshLineup(true); }; });
+        panel.querySelectorAll('[data-d]').forEach((el) => { el.onclick = () => { if (isHost()) M.net.update(base() + '/meta', { diff: el.dataset.d }); }; });
+        on('mp-online', () => connect('fire'));
+        on('mp-local', () => connect('local'));
+        on('mp-cfgsave', () => {
+            const t = $('mp-cfg').value;
+            const c = parseConfig(t);
+            if (!c) { M.err = 'That does not look like a Firebase config. It needs at least apiKey and databaseURL (or projectId).'; renderPanel(); return; }
+            LS.set('doors_fb_config', t); M.err = ''; toast('💾 Firebase config saved!'); renderPanel();
+        });
+        on('mp-cfgclr', () => { LS.set('doors_fb_config', ''); renderPanel(); });
+        on('mp-create', createLobby);
+        on('mp-joinb', () => joinLobby(($('mp-join').value || '').trim().toUpperCase()));
+        const jn = $('mp-join'); if (jn) jn.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') joinLobby((jn.value || '').trim().toUpperCase()); };
+        on('mp-disc', () => { disconnect(); renderPanel(); });
+        on('mp-leave', () => { leaveLobby(); renderPanel(); });
+        on('mp-back', closeLobby);
+        on('mp-start', startRunHost);
+        on('mp-ready', () => { const me = M.players[PID]; M.net.update(base() + '/players/' + PID, { ready: !(me && me.ready) }); });
+        on('mp-code', () => { try { navigator.clipboard.writeText(M.code); toast('📋 Code copied: ' + M.code); } catch (e) { toast('Code: ' + M.code); } });
+    }
+    function sortedIds() {
+        return Object.keys(M.players).sort((a, b) => ((M.players[a].joinedAt || 0) - (M.players[b].joinedAt || 0)) || (a < b ? -1 : 1));
+    }
+
+    // ---------------- open / close the lobby screen ----------------
+    window.__mpOpenLobby = function () {
+        const api = A(); if (!api) return;
+        $('dr-intro').style.display = 'none';
+        M.lobbyView = true;
+        try { document.exitPointerLock(); } catch (e) { /* ignore */ }
+        renderPanel();
+        refreshLineup(true);
+        if (!M.net && savedConfig() && !M.connecting && !M.err) connect('fire');
+    };
+    function closeLobby() {
+        leaveLobby();
+        M.lobbyView = false;
+        grabPreShop(false);
+        renderPanel();
+        clearAvatars();
+        window.__mpMods = null; window.__mpIsHost = false;
+        const st = S();
+        if (st && st.active) $('dr-intro').style.display = 'flex';
+    }
+
+    // ================================================================
+    // CONNECT / LOBBIES
+    // ================================================================
+    async function connect(kind) {
+        if (M.connecting) return;
+        M.connecting = true; M.err = ''; renderPanel();
+        try {
+            if (kind === 'fire') {
+                const cfg = savedConfig();
+                if (!cfg) throw new Error('No Firebase config yet. Paste it in the box below (see README.md).');
+                M.net = await makeFirebaseNet(cfg);
+            } else M.net = await makeLocalNet();
+            M.mode = kind;
+        } catch (e) {
+            console.error(e);
+            M.net = null; M.err = (e && e.message) ? e.message : String(e);
+        }
+        M.connecting = false;
+        renderPanel();
+    }
+    function disconnect() { leaveLobby(); M.net = null; M.mode = null; }
+    async function createLobby() {
+        if (!M.net) return;
+        const C = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let code = '';
+        for (let tries = 0; tries < 6; tries++) {
+            code = ''; for (let i = 0; i < 5; i++) code += C[Math.floor(Math.random() * C.length)];
+            const ex = await M.net.once(ROOT + '/' + code + '/meta').catch(() => null);
+            if (!ex) break;
+        }
+        await M.net.set(ROOT + '/' + code + '/meta', { host: PID, state: 'lobby', diff: (typeof difficulty !== 'undefined' ? difficulty : 'NORMAL'), mods: Object.assign({}, (window.__plusMods && window.__plusMods.local) || {}), created: now(), runId: '', seed: '' });
+        enterLobby(code);
+    }
+    async function joinLobby(code) {
+        if (!M.net) return;
+        if (!/^[A-Z0-9]{5}$/.test(code)) { M.err = 'Lobby codes are 5 letters/numbers.'; renderPanel(); return; }
+        const meta = await M.net.once(ROOT + '/' + code + '/meta').catch(() => null);
+        if (!meta) { M.err = 'No lobby with code ' + code + '. Check the code (and that you are using the same Firebase project).'; renderPanel(); return; }
+        M.err = '';
+        enterLobby(code);
+    }
+    async function enterLobby(code) {
+        M.code = code;
+        M.joinedAt = now();
+        M.players = {}; M.remote = {}; M.meta = null; M.firstMeta = true; M.hostGone = 0;
+        try { const pl = await M.net.once(base() + '/players'); if (pl) M.players = pl; } catch (e) { /* ignore */ }
+        const me = { name: prof.name, color: prof.color, hat: prof.hat, skin: prof.skin, ready: false, joinedAt: M.joinedAt };
+        M.net.set(base() + '/players/' + PID, me);
+        M.players[PID] = me;
+        M.net.onDisconnectRemove(base() + '/players/' + PID);
+        M.net.onDisconnectRemove(base() + '/st/' + PID);
+        M.unsub.push(M.net.onValue(base() + '/meta', onMeta));
+        M.unsub.push(M.net.onChild(base() + '/players', {
+            added: (k, v) => { const isNew = !M.players[k]; M.players[k] = v; if (isNew && k !== PID && M.code) { feed('👋 <b>' + esc(v.name) + '</b> joined', v.color); beep('triangle', 600, 900, 0, 0.12, 0.05); } renderPanel(); refreshLineup(true); },
+            changed: (k, v) => { M.players[k] = v; renderPanel(); refreshLineup(true); },
+            removed: (k, v) => {
+                delete M.players[k];
+                const r = M.remote[k]; if (r && r.av) { removeAvatar(r); }
+                delete M.remote[k];
+                if (k !== PID && v) feed('🚪 <b>' + esc(v.name) + '</b> left', v.color);
+                if (k === PID && M.code) { /* we got removed (e.g. lost connection) -> re-add */ M.net.set(base() + '/players/' + PID, Object.assign({}, me, { name: prof.name, color: prof.color, hat: prof.hat, skin: prof.skin })); }
+                fixHost(); renderPanel(); refreshLineup(true);
+            }
+        }));
+        M.unsub.push(M.net.onChild(base() + '/st', { added: onState, changed: onState, removed: (k) => { const r = M.remote[k]; if (r) r.st = null; } }));
+        M.unsub.push(M.net.onChild(base() + '/ev', { added: onEvent }));
+        M.unsub.push(M.net.onValue(base() + '/ent', onEnt));
+        M.unsub.push(M.net.onChild(base() + '/chat', { added: onChat }));
+        renderPanel();
+        refreshLineup(true);
+    }
+    function leaveLobby() {
+        if (!M.net || !M.code) { M.code = null; return; }
+        const code = M.code, others = Object.keys(M.players).filter((k) => k !== PID);
+        M.unsub.forEach((f) => { try { f(); } catch (e) { /* ignore */ } });
+        M.unsub = [];
+        M.net.cancelDisconnect(base() + '/players/' + PID);
+        M.net.cancelDisconnect(base() + '/st/' + PID);
+        if (!others.length) M.net.remove(ROOT + '/' + code);
+        else {
+            M.net.remove(base() + '/players/' + PID);
+            M.net.remove(base() + '/st/' + PID);
+            if (M.meta && M.meta.host === PID) {
+                const next = others.sort((a, b) => (M.players[a].joinedAt || 0) - (M.players[b].joinedAt || 0))[0];
+                M.net.update(base() + '/meta', { host: next });
+            }
+        }
+        M.code = null; M.meta = null; M.players = {};
+        Object.values(M.remote).forEach((r) => removeAvatar(r));
+        M.remote = {};
+        if (M.inRun) endMpRun();
+        window.__mpMods = null; window.__mpIsHost = false;
+    }
+    function fixHost() {
+        if (!M.meta || !M.code) return;
+        if (M.meta.host && M.players[M.meta.host]) { M.hostGone = 0; return; }
+        // the host left: after a short grace period the longest-waiting player takes over
+        if (!M.hostGone) { M.hostGone = performance.now(); setTimeout(fixHost, 2200); return; }
+        if (performance.now() - M.hostGone < 2000) return;
+        M.hostGone = 0;
+        const h = hostId();
+        if (h === PID && M.meta.host !== PID) M.net.update(base() + '/meta', { host: PID });
+    }
+    function pushProfile() {
+        if (!M.net || !M.code) return;
+        M.net.update(base() + '/players/' + PID, { name: prof.name, color: prof.color, hat: prof.hat, skin: prof.skin });
+    }
+    window.__mpOnModsChanged = function (mods) {
+        if (!isHost() || !M.net || !M.code) return;
+        window.__mpMods = mods;
+        M.net.update(base() + '/meta', { mods: mods });
+    };
+
+    function onMeta(v) {
+        if (!M.code) return;
+        if (!v) { // lobby deleted
+            if (M.inRun) endMpRun();
+            toast('The lobby was closed.');
+            M.code = null; M.meta = null; M.players = {};
+            M.unsub.forEach((f) => { try { f(); } catch (e) { /* ignore */ } }); M.unsub = [];
+            renderPanel(); return;
+        }
+        const first = M.firstMeta; M.firstMeta = false;
+        M.meta = v;
+        window.__mpMods = v.mods || {};
+        window.__mpIsHost = isHost();
+        fixHost();
+        if (v.state === 'playing' && v.runId && v.runId !== M.rid) {
+            // joining while a run is already going: wait for the next one
+            if (first && now() - (v.startAt || 0) > 8000) { M.skipRid = v.runId; }
+            else if (v.runId !== M.skipRid) startMpRun(v);
+        } else if (v.state === 'lobby' && M.inRun) {
+            backToLobby();
+        }
+        renderPanel();
+    }
+
+    // ---------------- host: start / return ----------------
+    function startRunHost() {
+        if (!isHost()) return;
+        const rnd = (window.__doorsApi && Math.random) ? Math.random : Math.random;
+        const seed = 'MP' + Math.floor(rnd() * 1e9).toString(36).toUpperCase();
+        const runId = 'r' + now().toString(36) + rid(4);
+        M.net.remove(base() + '/ev');
+        M.net.remove(base() + '/ent');
+        M.net.remove(base() + '/chat');
+        Object.keys(M.players).forEach((id) => { if (id !== PID) M.net.update(base() + '/players/' + id, { ready: false }); });
+        M.net.update(base() + '/meta', { state: 'playing', runId: runId, seed: seed, startAt: now() + 3500, diff: (M.meta && M.meta.diff) || 'NORMAL', mods: window.__mpMods || {} });
+    }
+    function hostBackToLobby() { if (isHost() && M.net && M.code) M.net.update(base() + '/meta', { state: 'lobby' }); }
+
+    // ================================================================
+    // RUN LIFECYCLE
+    // ================================================================
+    function startMpRun(meta) {
+        const api = A(); if (!api || !window.startDoors) return;
+        M.rid = meta.runId;
+        M.inRun = true; M.runStarted = false; M.ended = false; M.paid = false; M.escaped = false;
+        M.used = new Map(); M.doors = new Set(); M.unlocks = new Set(); M.claimed = new Set();
+        M.alexBuf = []; M.mrcBuf = []; M.spectIdx = 0; M.lastHp = 100;
+        M.lobbyView = false;
+        renderPanel();
+        grabPreShop(false);
+        clearAvatars();
+        ['mp-end', 'mp-dead', 'mp-spect'].forEach((id) => { $(id).style.display = 'none'; });
+        window.__mpMods = meta.mods || {};
+        window.startDoors({ seed: meta.seed, diff: meta.diff || 'NORMAL', mp: true });
+        const st = S();
+        const ids = sortedIds(), idx = Math.max(0, ids.indexOf(PID));
+        st.P.x = clamp((idx - (ids.length - 1) / 2) * 1.15, -5, 5);
+        st.P.yaw = 0;
+        setupLightPool();
+        $('mp-list').style.display = 'block';
+        M.startAt = meta.startAt || now();
+        M.countdown = Math.max(0.2, (M.startAt - now()) / 1000);
+        $('mp-count').style.display = 'flex';
+        beep('triangle', 440, 440, 0, 0.12, 0.06);
+    }
+    function beginNow() {
+        $('mp-count').style.display = 'none';
+        const api = A();
+        api.beginRun();
+        M.runStarted = true;
+        beep('triangle', 880, 1320, 0, 0.25, 0.08);
+        // replay anything that arrived early
+        const q = M.queue.filter((e) => e.rid === M.rid);
+        M.queue = [];
+        q.forEach(applyEvent);
+    }
+    function endMpRun() {
+        M.inRun = false; M.runStarted = false; M.rid = null;
+        removeLightPool();
+        $('mp-list').style.display = 'none';
+        ['mp-end', 'mp-dead', 'mp-spect', 'mp-count'].forEach((id) => { const el = $(id); if (el) el.style.display = 'none'; });
+        const st = S();
+        if (st) st.chatOpen = false;
+        closeChat();
+    }
+    function backToLobby() {
+        endMpRun();
+        const st = S();
+        if (!st || !st.active) return;
+        window.startDoors({ mp: true });
+        $('dr-intro').style.display = 'none';
+        $('dr-end').style.display = 'none';
+        M.lobbyView = true;
+        try { document.exitPointerLock(); } catch (e) { /* ignore */ }
+        renderPanel();
+        refreshLineup(true);
+    }
+    H.onExit = function () {
+        // leaving DOORS entirely (quit to the main menu)
+        if (M.code) leaveLobby();
+        M.lobbyView = false;
+        grabPreShop(false);
+        renderPanel();
+        clearAvatars();
+        endMpRun();
+    };
+
+    // ================================================================
+    // EVENTS
+    // ================================================================
+    H.on = () => M.inRun && !!M.code;
+    H.emit = function (type, data) {
+        if (!M.net || !M.code || !M.inRun) return;
+        const ev = Object.assign({}, data, { t: type, f: PID, rid: M.rid, ts: now() });
+        M.net.push(base() + '/ev', ev);
+        localEcho(type, data);
+    };
+    // feedback for our own actions
+    function localEcho(type, d) {
+        if (type === 'chase') feed('🧑‍🍳 <b>You</b> woke Alex — the whole team was pulled in!', prof.color);
+        else if (type === 'lib') feed('📚 <b>You</b> entered ' + (d.n === 100 ? 'ROOM 100' : 'the Library') + ' — team pulled in!', prof.color);
+        else if (type === 'die') feed('💀 <b>You</b> were taken by ' + killer(d.by), '#ef4444');
+        else if (type === 'win') feed('🎉 <b>You ESCAPED!</b>', '#4ade80');
+    }
+    function killer(by) { return ({ mrsc: 'Mrs. C', alex: 'Alex', rush: 'Rush', ambush: 'Ambush', screech: 'Screech', eyes: 'Eyes', halt: 'Halt', hide: 'Hide', timothy: 'Timothy', chandelier: 'a chandelier', fire: 'grease fire', giggle: 'Giggle', dupe: 'Dupe', snare: 'a Snare', janitor: 'the Janitor', chef: 'a chef' })[by] || (by || 'the hotel'); }
+    function onEvent(key, ev) {
+        if (!ev || M.seen.has(key)) return;
+        M.seen.add(key);
+        if (M.seen.size > 5000) M.seen = new Set(Array.from(M.seen).slice(-2000));
+        if (ev.f === PID) return;
+        if (!M.inRun || ev.rid !== M.rid || !M.runStarted) {
+            if (ev.rid && ev.rid !== M.skipRid) { M.queue.push(ev); if (M.queue.length > 400) M.queue.shift(); }
+            return;
+        }
+        applyEvent(ev);
+    }
+    function slotX() { const ids = sortedIds(), i = Math.max(0, ids.indexOf(PID)); return clamp((i - (ids.length - 1) / 2) * 1.1, -3.2, 3.2); }
+    function applyEvent(ev) {
+        const api = A(), st = S();
+        if (!api || !st || !st.active) return;
+        const who = nameOf(ev.f), col = colorOf(ev.f);
+        const prevApplying = H.applying;
+        H.applying = true;
+        try {
+            switch (ev.t) {
+                case 'enter': { M.claimed.add(ev.n); const r = st.rooms[ev.n]; if (r && r.mpClaim === undefined) r.mpClaim = false; break; }
+                case 'door': M.doors.add(ev.n); if (st.rooms[ev.n]) api.applyDoor(st.rooms[ev.n]); break;
+                case 'unlock': M.unlocks.add(ev.n); if (st.rooms[ev.n]) api.applyUnlock(st.rooms[ev.n]); break;
+                case 'use': { M.used.set(ev.u, who); const t = api.findInter(ev.u); if (t) api.applyUse(t, who); break; }
+                case 'rush': api.remoteRush(ev.n, ev.k, ev.ps, ev.tut); break;
+                case 'eyes': api.remoteEyes(ev.n); break;
+                case 'chase': feed('🧑‍🍳 <b>' + esc(who) + '</b> woke ALEX!', col); api.remoteChase(ev.n, slotX()); break;
+                case 'chaseEnd': api.remoteChaseEnd(); break;
+                case 'alexHit': case 'alexStun': if (H.isAuth()) api.remoteAlex(ev.t, ev); break;
+                case 'lib': feed('📚 <b>' + esc(who) + '</b> opened ' + (ev.n === api.TOTAL_ROOMS ? 'ROOM 100' : 'the Library') + '!', col); api.remoteLib(ev.n, slotX()); break;
+                case 'libOpen': api.remoteLibOpen(ev.n); break;
+                case 'fuse': api.remoteFuse(ev.total); break;
+                case 'power': feed('⚡ <b>' + esc(who) + '</b> restored the power!', col); api.remotePower(); break;
+                case 'mcNoise': case 'mcHit': case 'mcStun': case 'mcCloset': case 'mcClosetRes': if (H.isAuth()) api.mcRemote(ev.t, Object.assign({ from: ev.f }, ev)); break;
+                case 'die': feed('💀 <b>' + esc(who) + '</b> was taken by ' + esc(killer(ev.by)) + ' (Room ' + api.pad3(ev.n || 0) + ')', '#ef4444'); sfx('drScream', 0.05); break;
+                case 'respawn': feed('✨ <b>' + esc(who) + '</b> is back in the game!', col); break;
+                case 'win': feed('🎉 <b>' + esc(who) + '</b> ESCAPED THE HOTEL!', '#4ade80'); break;
+                case 'emote': { const r = M.remote[ev.f]; if (r && r.av) r.av.emote(ev.e || 'wave'); if (ev.e === 'wave') feed('👋 <b>' + esc(who) + '</b> waves', col); break; }
+                case 'ping': addPing(ev.x, ev.y, ev.z, who, col, ev.l); break;
+                default: break;
+            }
+        } catch (e) { console.error('MP apply', ev.t, e); }
+        H.applying = prevApplying;
+    }
+    // rooms that get built later (we were behind) catch up on what the team already did
+    H.built = function (room) {
+        if (!M.inRun) return;
+        const api = A();
+        const prevApplying = H.applying;
+        H.applying = true;
+        try {
+            if (M.claimed.has(room.n)) room.mpClaim = false;
+            if (M.unlocks.has(room.n)) api.applyUnlock(room);
+            if (M.doors.has(room.n)) api.applyDoor(room, true);
+            const pre = room.n + ':';
+            M.used.forEach((who, u) => { if (u.indexOf(pre) === 0) { const t = room.inter.find((it) => it.uid === u); if (t) api.applyUse(t, who, true); } });
+        } catch (e) { console.error(e); }
+        H.applying = prevApplying;
+    };
+    H.claimRoom = function (n) {
+        if (M.claimed.has(n)) return false;
+        M.claimed.add(n);
+        H.emit('enter', { n: n });
+        return true;
+    };
+    function onChat(key, v) {
+        if (!v || M.seen.has('c' + key)) return;
+        M.seen.add('c' + key);
+        if (M.rid && v.rid && v.rid !== M.rid && M.inRun) return;
+        if (now() - (v.ts || 0) > 60000) return;
+        chatLine(v.f, v.m);
+        const r = M.remote[v.f]; if (r && r.av) r.av.say(v.m);
+        if (v.f !== PID) beep('sine', 1200, 1500, 0, 0.06, 0.03);
+    }
+
+    // ================================================================
+    // PRESENCE (positions, health, flags) + INTERPOLATION
+    // ================================================================
+    const F = { hidden: 1, crouch: 2, sprint: 4, dead: 8, light: 16, escaped: 32, moving: 64 };
+    function onState(k, v) {
+        if (k === PID || !v) return;
+        let r = M.remote[k];
+        if (!r) r = M.remote[k] = { id: k, buf: [], st: null, cur: null, av: null };
+        r.st = v; r.last = performance.now();
+        r.buf.push({ rt: performance.now(), x: +v.x || 0, z: +v.z || 0, h: +v.h || 1.65, y: +v.y || 0, p: +v.p || 0 });
+        if (r.buf.length > 12) r.buf.shift();
+    }
+    function interp(r) {
+        const b = r.buf;
+        if (!b.length) return null;
+        const t = performance.now() - 120;
+        let a = b[0], c = b[b.length - 1];
+        if (t <= a.rt) return a;
+        if (t >= c.rt) return c;
+        for (let i = 0; i < b.length - 1; i++) if (b[i].rt <= t && b[i + 1].rt >= t) { a = b[i]; c = b[i + 1]; break; }
+        const k = clamp((t - a.rt) / Math.max(1, c.rt - a.rt), 0, 1);
+        return { x: a.x + (c.x - a.x) * k, z: a.z + (c.z - a.z) * k, h: a.h + (c.h - a.h) * k, y: angLerp(a.y, c.y, k), p: a.p + (c.p - a.p) * k };
+    }
+    function remoteActive(r) { return r && r.st && r.st.rid === M.rid && M.players[r.id] && performance.now() - (r.last || 0) < 6000; }
+    function sendState(force) {
+        const st = S(), api = A();
+        if (!st || !st.P || !M.net || !M.code) return;
+        const t = performance.now();
+        if (!force && t - M.lastSend < 1000 / SEND_HZ) return;
+        M.lastSend = t;
+        const P = st.P;
+        let f = 0;
+        if (P.hidden) f |= F.hidden; if (P.crouch) f |= F.crouch; if (P.sprinting) f |= F.sprint; if (st.dead) f |= F.dead;
+        if (st.flashOn && api.equipped() === 'flashlight' && st.battery > 0) f |= F.light;
+        if (st.won) f |= F.escaped; if (P.moving) f |= F.moving;
+        M.net.set(base() + '/st/' + PID, {
+            x: r2(P.x), z: r2(P.z), h: r2(P.hidden ? P.hidden.camY : P.eyeH || 1.65), y: r2(P.yaw), p: r2(P.pitch), r: st.cur, hp: Math.round(P.hp), f: f,
+            it: api.equipped() || '', n: r2(Math.max(P.noiseShown || 0, P.noiseKick || 0)), hs: P.hidden && P.hidden.uid ? P.hidden.uid : '', rid: M.rid || '', g: st.gold || 0, t: now()
+        });
+    }
+    H.players = function () {
+        const st = S(), out = [];
+        if (st && st.P) out.push({ id: PID, me: true, name: prof.name, x: st.P.x, z: st.P.z, room: st.cur, dead: !!st.dead || !!st.won, hidden: !!st.P.hidden, noise: Math.max(st.P.noiseShown || 0, st.P.noiseKick || 0), hs: st.P.hidden && st.P.hidden.uid });
+        Object.values(M.remote).forEach((r) => {
+            if (!remoteActive(r)) return;
+            const c = r.cur || interp(r) || { x: r.st.x, z: r.st.z };
+            out.push({ id: r.id, me: false, name: nameOf(r.id), x: c.x, z: c.z, room: r.st.r, dead: !!(r.st.f & (F.dead | F.escaped)), hidden: !!(r.st.f & F.hidden), noise: +r.st.n || 0, hs: r.st.hs });
+        });
+        return out;
+    };
+    function authId() {
+        const st = S();
+        const c = [];
+        if (st && !st.dead && !st.won) c.push(PID);
+        Object.values(M.remote).forEach((r) => { if (remoteActive(r) && !(r.st.f & (F.dead | F.escaped))) c.push(r.id); });
+        c.sort((a, b) => (((M.players[a] || {}).joinedAt || 0) - ((M.players[b] || {}).joinedAt || 0)) || (a < b ? -1 : 1));
+        return c[0] || PID;
+    }
+    H.isAuth = () => authId() === PID;
+    H.occupied = function (uid) {
+        if (!uid) return null;
+        for (const r of Object.values(M.remote)) if (remoteActive(r) && (r.st.f & F.hidden) && r.st.hs === uid) return nameOf(r.id);
+        return null;
+    };
+
+    // ---------------- Alex / Mrs. C snapshots ----------------
+    H.pushAlex = function (o) {
+        const t = performance.now();
+        if (t - M.lastAlex < 100) return;
+        M.lastAlex = t;
+        M.net.set(base() + '/ent/a', { x: r2(o.x), z: r2(o.z), s: r2(o.stun), v: r2(o.spd), n: o.n, rid: M.rid, by: PID });
+    };
+    H.pushMrc = function (o) {
+        const t = performance.now();
+        if (t - M.lastMrc < 100) return;
+        M.lastMrc = t;
+        M.net.set(base() + '/ent/m', { x: r2(o.x), z: r2(o.z), st: o.st, ry: r2(o.ry), n: o.n, rid: M.rid, by: PID });
+    };
+    function onEnt(v) {
+        if (!v) return;
+        const t = performance.now();
+        if (v.a && v.a.rid === M.rid && v.a.by !== PID) { const L = M.alexBuf; const l = L[L.length - 1]; if (!l || l.x !== v.a.x || l.z !== v.a.z) { L.push(Object.assign({ rt: t }, v.a)); if (L.length > 8) L.shift(); } }
+        if (v.m && v.m.rid === M.rid && v.m.by !== PID) { const L = M.mrcBuf; const l = L[L.length - 1]; if (!l || l.x !== v.m.x || l.z !== v.m.z || l.st !== v.m.st) { L.push(Object.assign({ rt: t }, v.m)); if (L.length > 8) L.shift(); } }
+    }
+    function snapLerp(L) {
+        if (!L.length) return null;
+        const t = performance.now() - 110;
+        let a = L[0], c = L[L.length - 1];
+        if (t >= c.rt || L.length === 1) return c;
+        if (t <= a.rt) return a;
+        for (let i = 0; i < L.length - 1; i++) if (L[i].rt <= t && L[i + 1].rt >= t) { a = L[i]; c = L[i + 1]; break; }
+        const k = clamp((t - a.rt) / Math.max(1, c.rt - a.rt), 0, 1);
+        return Object.assign({}, c, { x: a.x + (c.x - a.x) * k, z: a.z + (c.z - a.z) * k, ry: angLerp(a.ry || 0, c.ry || 0, k) });
+    }
+    H.alexSnap = function () {
+        const st = S(), c = st && st.chase;
+        const s = snapLerp(M.alexBuf);
+        if (!s || !c || !c.room || s.n !== c.room.n) return null;
+        return { x: s.x, z: s.z, stun: s.s, spd: s.v };
+    };
+    H.mrcSnap = function () {
+        const st = S(), L = st && st.library;
+        const s = snapLerp(M.mrcBuf);
+        if (!s || !L || !L.room || s.n !== L.room.n) return null;
+        return s;
+    };
+
+    // ================================================================
+    // AVATARS
+    // ================================================================
+    const AVG = {};
+    function gCyl(rt, rb, h, s) { const k = 'c' + rt + '_' + rb + '_' + h + '_' + (s || 10); return AVG[k] || (AVG[k] = new THREE.CylinderGeometry(rt, rb, h, s || 10)); }
+    function gSph(r, w, h) { const k = 's' + r + '_' + (w || 12); return AVG[k] || (AVG[k] = new THREE.SphereGeometry(r, w || 12, h || 10)); }
+    function gBox(x, y, z) { const k = 'b' + x + '_' + y + '_' + z; return AVG[k] || (AVG[k] = new THREE.BoxGeometry(x, y, z)); }
+    function lam(c, e) { return new THREE.MeshLambertMaterial({ color: c, emissive: e === undefined ? 0x000000 : e }); }
+    function joint(parent, x, y, z) { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; }
+    function mesh(parent, g, m, x, y, z) { const me = new THREE.Mesh(g, m); me.position.set(x || 0, y || 0, z || 0); parent.add(me); return me; }
+    function tagTexture(name, color, hp, extra) {
+        const c = document.createElement('canvas'); c.width = 320; c.height = 96;
+        const g = c.getContext('2d');
+        if (g) {
+            g.font = 'bold 36px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+            const w = Math.min(300, g.measureText(name).width + 34);
+            g.fillStyle = 'rgba(10,6,2,0.62)';
+            const x0 = 160 - w / 2;
+            g.beginPath(); if (g.roundRect) g.roundRect(x0, 6, w, 50, 14); else g.rect(x0, 6, w, 50); g.fill();
+            g.fillStyle = color; g.fillRect(x0 + 10, 24, 10, 14);
+            g.lineWidth = 5; g.strokeStyle = '#000'; g.strokeText(name, 166, 32);
+            g.fillStyle = '#fff7d6'; g.fillText(name, 166, 32);
+            if (hp !== null && hp !== undefined) {
+                g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(90, 64, 140, 14);
+                g.fillStyle = hp > 60 ? '#22c55e' : hp > 30 ? '#f59e0b' : '#ef4444'; g.fillRect(92, 66, 136 * clamp(hp, 0, 100) / 100, 10);
+            }
+            if (extra) { g.font = 'bold 28px serif'; g.fillText(extra, 268, 72); }
+        }
+        const t = new THREE.CanvasTexture(c);
+        return t;
+    }
+    function bubbleTexture(text) {
+        const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+        const g = c.getContext('2d');
+        if (g) {
+            g.font = 'bold 30px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+            let t = text.length > 34 ? text.slice(0, 33) + '…' : text;
+            const w = Math.min(500, g.measureText(t).width + 40);
+            g.fillStyle = 'rgba(255,250,235,0.95)';
+            g.beginPath(); if (g.roundRect) g.roundRect(256 - w / 2, 10, w, 74, 22); else g.rect(256 - w / 2, 10, w, 74); g.fill();
+            g.beginPath(); g.moveTo(240, 82); g.lineTo(256, 112); g.lineTo(272, 82); g.fill();
+            g.fillStyle = '#1a0f07'; g.fillText(t, 256, 48);
+        }
+        return new THREE.CanvasTexture(c);
+    }
+    function buildHat(R, info, head) {
+        const hat = info.hat || 'none', col = new THREE.Color(info.color || '#3b82f6');
+        const hairCol = [0x3b2414, 0x2a1a10, 0x1a1008, 0x120a05, 0x8a5a2a][info.skin || 0];
+        const hair = lam(hairCol, 0x080402);
+        const dark = lam(col.clone().multiplyScalar(0.55));
+        const main = lam(col, col.clone().multiplyScalar(0.08));
+        // hair under every hat
+        const cap = mesh(head, gSph(0.178, 14, 10), hair, 0, 0.18, -0.012); cap.scale.set(1.02, 0.78, 1.04);
+        const fringe = mesh(head, gBox(0.26, 0.05, 0.06), hair, 0, 0.27, 0.13); fringe.rotation.x = -0.4;
+        if (hat === 'none') {
+            for (let i = 0; i < 5; i++) { const s = mesh(head, gSph(0.06, 8, 6), hair, -0.1 + i * 0.05, 0.33, -0.02 + (i % 2) * 0.04); s.scale.set(1, 0.7, 1); }
+        } else if (hat === 'cap') {
+            mesh(head, gCyl(0.182, 0.185, 0.1, 16), main, 0, 0.29, 0);
+            const top = mesh(head, gSph(0.182, 16, 8), main, 0, 0.33, 0); top.scale.y = 0.45;
+            const brim = mesh(head, gBox(0.26, 0.025, 0.17), dark, 0, 0.255, 0.2); brim.rotation.x = 0.12;
+            mesh(head, gSph(0.02, 6, 6), dark, 0, 0.41, 0);
+        } else if (hat === 'beanie') {
+            const b = mesh(head, gSph(0.19, 16, 10), main, 0, 0.27, -0.01); b.scale.set(1, 0.72, 1);
+            mesh(head, gCyl(0.19, 0.19, 0.06, 16), dark, 0, 0.22, 0);
+            mesh(head, gSph(0.055, 10, 8), lam(0xffffff), 0, 0.42, -0.01);
+        } else if (hat === 'chef') {
+            const w = lam(0xf8f8f8, 0x202020);
+            mesh(head, gCyl(0.17, 0.165, 0.2, 16), w, 0, 0.36, 0);
+            for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; mesh(head, gSph(0.1, 10, 8), w, Math.cos(a) * 0.09, 0.5, Math.sin(a) * 0.09); }
+            mesh(head, gSph(0.11, 10, 8), w, 0, 0.53, 0);
+        } else if (hat === 'crown') {
+            const gold = lam(0xffcf3a, 0x5a3c00);
+            mesh(head, gCyl(0.17, 0.165, 0.09, 16), gold, 0, 0.33, 0);
+            for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; const sp = mesh(head, new THREE.ConeGeometry(0.035, 0.1, 6), gold, Math.cos(a) * 0.15, 0.42, Math.sin(a) * 0.15); sp.rotation.z = 0; }
+            mesh(head, gSph(0.025, 6, 6), lam(0xef4444, 0x400000), 0, 0.34, 0.17);
+        } else if (hat === 'headphones') {
+            const band = mesh(head, new THREE.TorusGeometry(0.2, 0.022, 6, 18, Math.PI), dark, 0, 0.17, 0); band.rotation.z = 0;
+            [-1, 1].forEach((s) => { const cup = mesh(head, gCyl(0.07, 0.07, 0.06, 14), main, s * 0.2, 0.15, 0); cup.rotation.z = Math.PI / 2; });
+        } else if (hat === 'bunny') {
+            const pink = lam(0xfbcfe8, 0x201018), white = lam(0xffffff, 0x202020);
+            [-1, 1].forEach((s) => {
+                const ear = mesh(head, gSph(0.06, 10, 8), white, s * 0.08, 0.48, -0.02); ear.scale.set(0.7, 2.6, 0.45); ear.rotation.z = -s * 0.15;
+                const inr = mesh(head, gSph(0.04, 8, 6), pink, s * 0.08, 0.48, 0.005); inr.scale.set(0.6, 2.4, 0.3); inr.rotation.z = -s * 0.15;
+            });
+        } else if (hat === 'wizard') {
+            const pur = lam(0x5b21b6, 0x120428);
+            mesh(head, gCyl(0.3, 0.3, 0.02, 20), pur, 0, 0.28, 0);
+            const cone = mesh(head, new THREE.ConeGeometry(0.19, 0.48, 16), pur, 0, 0.52, -0.02); cone.rotation.x = -0.18;
+            mesh(head, gSph(0.03, 6, 6), lam(0xfde047, 0x6a5a00), 0.06, 0.5, 0.12);
+        }
+    }
+    function buildItem(hand, id) {
+        const g = new THREE.Group(); hand.add(g);
+        g.position.set(0, -0.06, 0.05);
+        if (id === 'flashlight') {
+            const b = mesh(g, gCyl(0.025, 0.022, 0.2, 10), lam(0x222226), 0, 0, 0.06); b.rotation.x = Math.PI / 2;
+            const hd = mesh(g, gCyl(0.04, 0.03, 0.06, 12), lam(0x333338), 0, 0, 0.17); hd.rotation.x = Math.PI / 2;
+            const lens = mesh(g, gCyl(0.034, 0.034, 0.01, 12), new THREE.MeshBasicMaterial({ color: 0xfff4c0 }), 0, 0, 0.205); lens.rotation.x = Math.PI / 2;
+            const beam = new THREE.Mesh(new THREE.ConeGeometry(0.75, 4.5, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xfff1b8, transparent: true, opacity: 0.075, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+            beam.rotation.x = -Math.PI / 2; beam.position.z = 0.2 + 2.25; g.add(beam);
+            g.userData.beam = beam;
+        } else if (id === 'lighter') {
+            mesh(g, gBox(0.04, 0.07, 0.025), lam(0xc0392b), 0, 0.02, 0.04);
+            const fl = mesh(g, gSph(0.022, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffb030 }), 0, 0.08, 0.04); fl.scale.y = 1.8;
+            g.userData.flame = fl;
+        } else if (id === 'crucifix') {
+            const m = lam(0xd4af37, 0x3a2a00);
+            mesh(g, gBox(0.025, 0.16, 0.02), m, 0, 0.05, 0.05); mesh(g, gBox(0.1, 0.025, 0.02), m, 0, 0.09, 0.05);
+        } else if (id === 'book') {
+            mesh(g, gBox(0.12, 0.16, 0.04), lam(0x8a2a2a), 0, 0.03, 0.05);
+        } else if (id === 'key' || id === 'skeleton') {
+            const m = lam(id === 'key' ? 0xffd54a : 0xe8e8e8, 0x3a3000);
+            mesh(g, new THREE.TorusGeometry(0.025, 0.008, 6, 10), m, 0, 0.04, 0.05); mesh(g, gBox(0.012, 0.07, 0.012), m, 0, -0.01, 0.05);
+        } else if (id) {
+            mesh(g, gBox(0.07, 0.09, 0.05), lam(0x9ca3af), 0, 0.02, 0.05);
+        }
+        return g;
+    }
+    function makeAvatar(info) {
+        const root = new THREE.Group(), body = new THREE.Group();
+        root.add(body);
+        const col = new THREE.Color(info.color || '#3b82f6');
+        const shirt = lam(col, col.clone().multiplyScalar(0.12)), shirtD = lam(col.clone().multiplyScalar(0.6), col.clone().multiplyScalar(0.05));
+        const skinC = SKINS[info.skin || 0] || SKINS[0];
+        const skin = lam(skinC, new THREE.Color(skinC).multiplyScalar(0.1)), pants = lam(0x273248, 0x05070c), shoe = lam(0x1d1d22), sole = lam(0xf2f2f2, 0x222222);
+        const pack = lam(new THREE.Color(col).offsetHSL(0.5, -0.1, -0.15), 0x050505);
+        const black = new THREE.MeshBasicMaterial({ color: 0x15100c }), white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const R = { t: Math.random() * 10, ph: 0, blink: 2 + Math.random() * 3, emoteT: 0, emote: '', hurtT: 0, step: 0 };
+        R.hips = joint(body, 0, 0.93, 0);
+        mesh(R.hips, gBox(0.33, 0.17, 0.21), pants, 0, 0, 0);
+        mesh(R.hips, gBox(0.35, 0.05, 0.23), lam(0x3a2a1a), 0, 0.075, 0);   // belt
+        R.spine = joint(R.hips, 0, 0.07, 0);
+        const torso = mesh(R.spine, gCyl(0.2, 0.175, 0.48, 14), shirt, 0, 0.25, 0); torso.scale.z = 0.7;
+        const shoulders = mesh(R.spine, gSph(0.205, 14, 8), shirt, 0, 0.47, 0); shoulders.scale.set(1.08, 0.42, 0.72);
+        mesh(R.spine, gBox(0.24, 0.09, 0.02), shirtD, 0, 0.13, 0.13);                       // hoodie pocket
+        const hood = mesh(R.spine, gSph(0.13, 12, 8), shirtD, 0, 0.5, -0.12); hood.scale.set(1.3, 0.7, 0.8);
+        [-0.04, 0.04].forEach((x) => mesh(R.spine, gCyl(0.008, 0.008, 0.14, 4), lam(0xf5f5f5), x, 0.38, 0.14));   // drawstrings
+        mesh(R.spine, gBox(0.27, 0.31, 0.12), pack, 0, 0.28, -0.19);                         // backpack
+        mesh(R.spine, gBox(0.2, 0.1, 0.03), lam(new THREE.Color(col).offsetHSL(0.5, -0.2, -0.3)), 0, 0.2, -0.26);
+        [-0.09, 0.09].forEach((x) => mesh(R.spine, gBox(0.035, 0.36, 0.02), pack, x, 0.3, 0.13));
+        R.neck = joint(R.spine, 0, 0.56, 0);
+        mesh(R.neck, gCyl(0.06, 0.065, 0.08, 10), skin, 0, 0.02, 0);
+        R.head = joint(R.neck, 0, 0.06, 0);
+        const head = mesh(R.head, gSph(0.17, 18, 14), skin, 0, 0.15, 0); head.scale.set(1, 1.07, 1);
+        [-1, 1].forEach((s) => { const e = mesh(R.head, gSph(0.04, 8, 6), skin, s * 0.17, 0.14, 0); e.scale.set(0.5, 1, 0.8); });
+        R.eyes = [];
+        [-1, 1].forEach((s) => {
+            const w = mesh(R.head, gSph(0.036, 10, 8), white, s * 0.062, 0.17, 0.142); w.scale.set(1, 1.15, 0.5);
+            const p = mesh(R.head, gSph(0.021, 8, 6), black, s * 0.062, 0.168, 0.158); p.scale.z = 0.5;
+            const hl = mesh(R.head, gSph(0.007, 6, 4), white, s * 0.062 + 0.008, 0.177, 0.168);
+            R.eyes.push(w, p, hl);
+            const br = mesh(R.head, gBox(0.055, 0.012, 0.01), black, s * 0.062, 0.222, 0.155); br.rotation.z = -s * 0.12;
+            const ch = mesh(R.head, gSph(0.025, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff8a8a, transparent: true, opacity: 0.35 }), s * 0.1, 0.11, 0.135); ch.scale.z = 0.3;
+        });
+        mesh(R.head, gSph(0.02, 8, 6), skin, 0, 0.135, 0.17);
+        R.mouth = mesh(R.head, new THREE.TorusGeometry(0.032, 0.008, 4, 12, Math.PI), black, 0, 0.1, 0.158); R.mouth.rotation.z = Math.PI;
+        buildHat(R, info, R.head);
+        [-1, 1].forEach((s) => {
+            const sh = joint(R.spine, s * 0.25, 0.46, 0); R['sh' + s] = sh;
+            mesh(sh, gSph(0.07, 10, 8), shirt, 0, 0, 0);
+            mesh(sh, gCyl(0.064, 0.056, 0.27, 10), shirt, 0, -0.14, 0);
+            const el = joint(sh, 0, -0.27, 0); R['el' + s] = el;
+            mesh(el, gCyl(0.055, 0.05, 0.22, 10), shirt, 0, -0.11, 0);
+            mesh(el, gCyl(0.056, 0.056, 0.04, 10), shirtD, 0, -0.21, 0);
+            const hand = joint(el, 0, -0.26, 0); R['hand' + s] = hand;
+            const hm = mesh(hand, gSph(0.052, 10, 8), skin, 0, 0, 0); hm.scale.set(0.9, 1.1, 0.8);
+            const hip = joint(R.hips, s * 0.095, -0.06, 0); R['hip' + s] = hip;
+            mesh(hip, gCyl(0.08, 0.07, 0.4, 10), pants, 0, -0.2, 0);
+            const kn = joint(hip, 0, -0.4, 0); R['kn' + s] = kn;
+            mesh(kn, gCyl(0.07, 0.06, 0.37, 10), pants, 0, -0.18, 0);
+            mesh(kn, gBox(0.12, 0.08, 0.23), shoe, 0, -0.4, 0.04);
+            mesh(kn, gBox(0.125, 0.025, 0.24), sole, 0, -0.445, 0.04);
+            mesh(kn, gBox(0.09, 0.01, 0.08), sole, 0, -0.36, 0.11);
+        });
+        // ground shadow
+        const sh = new THREE.Mesh(new THREE.CircleGeometry(0.36, 18), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }));
+        sh.rotation.x = -Math.PI / 2; sh.position.y = 0.015; root.add(sh);
+        // name tag + chat bubble
+        const tagMat = new THREE.SpriteMaterial({ map: tagTexture(info.name || 'Player', info.color || '#fff', null), depthTest: false, transparent: true });
+        const tag = new THREE.Sprite(tagMat); tag.scale.set(1.15, 0.345, 1); tag.position.y = 2.05; tag.renderOrder = 999; root.add(tag);
+        const bubMat = new THREE.SpriteMaterial({ map: bubbleTexture(''), depthTest: false, transparent: true });
+        const bub = new THREE.Sprite(bubMat); bub.scale.set(1.7, 0.42, 1); bub.position.y = 2.45; bub.visible = false; bub.renderOrder = 1000; root.add(bub);
+        let tagKey = '', item = null, itemId = null, bubT = 0;
+        const self = {
+            root: root, R: R, info: info,
+            setTag(name, color, hp, extra) {
+                const k = name + '|' + color + '|' + (hp === null ? 'n' : Math.round(hp / 5)) + '|' + (extra || '');
+                if (k === tagKey) return;
+                tagKey = k;
+                if (tagMat.map) tagMat.map.dispose();
+                tagMat.map = tagTexture(name, color, hp, extra); tagMat.needsUpdate = true;
+            },
+            say(text) { if (bubMat.map) bubMat.map.dispose(); bubMat.map = bubbleTexture(text); bubMat.needsUpdate = true; bub.visible = true; bubT = 5.5; },
+            emote(e) { R.emote = e; R.emoteT = e === 'wave' ? 2.2 : 1.6; },
+            hurt() { R.hurtT = 0.5; },
+            hideTag() { tag.visible = false; bub.position.y = 2.1; },
+            setItem(id) {
+                if (id === itemId) return;
+                itemId = id;
+                if (item) { R.hand1.remove(item); item = null; }
+                if (id) item = buildItem(R.hand1, id);
+            },
+            update(s, dt, camPos) {
+                R.t += dt;
+                const tg = {};
+                const spd = s.speed || 0, moving = spd > 0.35;
+                const crouch = !!s.crouch;
+                // blink
+                R.blink -= dt;
+                const bl = R.blink < 0.12 ? 0.12 : 1;
+                if (R.blink < 0) R.blink = 2.5 + Math.random() * 3.5;
+                R.eyes.forEach((e, i) => { if (i % 3 === 0) e.scale.y = 1.15 * bl; else e.scale.y = bl; });
+                if (moving) {
+                    R.ph += dt * (crouch ? 5.5 : 3.2 + spd * 1.25);
+                    const a = crouch ? 0.45 : clamp(spd / 7, 0.35, 1.0), p = R.ph, sn = Math.sin(p), cs = Math.cos(p);
+                    tg['hip-1.x'] = -sn * 0.8 * a; tg['hip1.x'] = sn * 0.8 * a;
+                    tg['kn-1.x'] = 0.1 + Math.max(0, cs) * 1.3 * a; tg['kn1.x'] = 0.1 + Math.max(0, -cs) * 1.3 * a;
+                    tg['sh-1.x'] = sn * 0.75 * a; tg['sh1.x'] = -sn * 0.75 * a;
+                    tg['el-1.x'] = -0.25 - a * 0.6; tg['el1.x'] = -0.25 - a * 0.6;
+                    tg['spine.x'] = 0.08 + a * 0.18; tg['spine.y'] = sn * 0.12 * a;
+                    tg['hips.py'] = (crouch ? 0.6 : 0.93) + Math.abs(cs) * 0.05 * a;
+                    // footsteps you can hear
+                    R.step += dt * spd;
+                    if (R.step > (s.sprint ? 2.6 : 2.0) && camPos) {
+                        R.step = 0;
+                        const d = Math.hypot(root.position.x - camPos.x, root.position.z - camPos.z);
+                        if (d < 14 && !crouch) sfx('drStep', (s.sprint ? 0.08 : 0.045) * (1 - d / 14));
+                    }
+                } else {
+                    const br = Math.sin(R.t * 1.8);
+                    tg['hip-1.x'] = 0; tg['hip1.x'] = 0; tg['kn-1.x'] = 0.04; tg['kn1.x'] = 0.04;
+                    tg['sh-1.x'] = br * 0.04; tg['sh1.x'] = -br * 0.04; tg['el-1.x'] = -0.15; tg['el1.x'] = -0.15;
+                    tg['spine.x'] = 0.02 + br * 0.015; tg['spine.y'] = 0; tg['hips.py'] = 0.93 + br * 0.006;
+                }
+                tg['sh-1.z'] = -0.08; tg['sh1.z'] = 0.08;
+                if (crouch) {
+                    tg['hips.py'] = moving ? tg['hips.py'] : 0.6;
+                    tg['hip-1.x'] = (tg['hip-1.x'] || 0) - 1.0; tg['hip1.x'] = (tg['hip1.x'] || 0) - 1.0;
+                    tg['kn-1.x'] = (tg['kn-1.x'] || 0) + 1.5; tg['kn1.x'] = (tg['kn1.x'] || 0) + 1.5;
+                    tg['spine.x'] = 0.42;
+                }
+                // head follows where they look
+                tg['neck.x'] = clamp(-(s.pitch || 0) * 0.65 - (tg['spine.x'] || 0) * 0.6, -0.9, 0.9);
+                // right hand holds the item out in front
+                if (itemId) { tg['sh1.x'] = -1.15 - (s.pitch || 0) * 0.8 - (crouch ? 0.3 : 0); tg['el1.x'] = -0.35; tg['sh1.z'] = -0.1; }
+                if (R.emoteT > 0) {
+                    R.emoteT -= dt;
+                    if (R.emote === 'wave') { tg['sh-1.x'] = -0.2; tg['sh-1.z'] = -2.7; tg['el-1.x'] = -0.2; tg['el-1.z'] = Math.sin(R.t * 14) * 0.5; }
+                }
+                if (!(R.emoteT > 0)) tg['el-1.z'] = 0;
+                if (R.hurtT > 0) { R.hurtT -= dt; tg['spine.x'] = -0.25; tg['neck.x'] = 0.3; }
+                const k = Math.min(1, dt * 14);
+                for (const key in tg) {
+                    const [n, ax] = key.split('.');
+                    const o = R[n]; if (!o) continue;
+                    if (ax === 'py') o.position.y += (tg[key] - o.position.y) * k;
+                    else o.rotation[ax] += (tg[key] - o.rotation[ax]) * k;
+                }
+                R.mouth.scale.set(1, R.hurtT > 0 ? -1 : 1, 1);
+                if (item && item.userData.beam) item.userData.beam.visible = !!s.light;
+                if (item && item.userData.flame) item.userData.flame.scale.set(1, 1.6 + Math.sin(R.t * 20) * 0.3, 1);
+                if (bubT > 0) { bubT -= dt; if (bubT <= 0) bub.visible = false; }
+                if (camPos) {
+                    const d = Math.hypot(root.position.x - camPos.x, root.position.z - camPos.z);
+                    tagMat.opacity = clamp(1.25 - d / 26, 0.15, 1);
+                    tag.visible = d < 34; bub.position.y = 2.45;
+                }
+            },
+            dispose() {
+                if (tagMat.map) tagMat.map.dispose(); if (bubMat.map) bubMat.map.dispose();
+                root.traverse((o) => { if (o.material && !Array.isArray(o.material) && o.material.dispose) o.material.dispose(); });
+                if (root.parent) root.parent.remove(root);
+            }
+        };
+        return self;
+    }
+    function avatarFor(r, info) {
+        const key = [info.name, info.color, info.hat, info.skin].join('|');
+        if (r.av && r.avKey === key) return r.av;
+        if (r.av) r.av.dispose();
+        r.av = makeAvatar(info); r.avKey = key;
+        if (typeof scene !== 'undefined') scene.add(r.av.root);
+        return r.av;
+    }
+    function removeAvatar(r) { if (r && r.av) { r.av.dispose(); r.av = null; r.avKey = null; } }
+    const lineup = {};   // pid -> { av }
+    function clearAvatars() {
+        Object.values(M.remote).forEach(removeAvatar);
+        Object.keys(lineup).forEach((k) => { removeAvatar(lineup[k]); delete lineup[k]; });
+    }
+    // lobby: everyone stands in a row in the hotel lobby
+    function refreshLineup(rebuild) {
+        if (!M.lobbyView) { Object.keys(lineup).forEach((k) => { removeAvatar(lineup[k]); delete lineup[k]; }); return; }
+        const ids = M.code ? sortedIds() : [PID];
+        Object.keys(lineup).forEach((k) => { if (ids.indexOf(k) < 0) { removeAvatar(lineup[k]); delete lineup[k]; } });
+        ids.forEach((id) => {
+            const info = id === PID ? prof : (M.players[id] || {});
+            const e = lineup[id] || (lineup[id] = {});
+            avatarFor(e, { name: info.name || 'Player', color: info.color || '#999', hat: info.hat || 'none', skin: info.skin || 0 });
+        });
+    }
+    function updLineup(dt) {
+        const st = S();
+        if (!M.lobbyView || !st || !st.active || st.running) return;
+        const lobby = st.rooms[0];
+        if (!lobby) return;
+        const ids = Object.keys(lineup);
+        const order = M.code ? sortedIds().filter((id) => lineup[id]) : ids;
+        const n = order.length;
+        st.P.x = -1.6; st.P.z = lobby.z0 - 2.2; st.P.yaw = -0.2; st.P.pitch = -0.08;
+        order.forEach((id, i) => {
+            const e = lineup[id]; if (!e || !e.av) return;
+            const x = 0.4 + (i - (n - 1) / 2) * 1.05, z = lobby.z0 - 6.2 - Math.abs(i - (n - 1) / 2) * 0.25;
+            e.av.root.position.set(x, 0, z);
+            e.av.root.rotation.y = Math.sin(performance.now() / 1300 + i) * 0.25 - 0.2;
+            const info = id === PID ? prof : (M.players[id] || {});
+            const ready = id === hostId() ? '👑' : (info.ready ? '✔' : '');
+            e.av.setTag(info.name || 'Player', info.color || '#999', null, ready);
+            e.av.setItem(id === PID ? 'flashlight' : 'lighter');
+            if (Math.random() < dt * 0.15) e.av.emote('wave');
+            e.av.update({ speed: 0 }, dt, camera.position);
+        });
+    }
+
+    // ================================================================
+    // IN-RUN: teammates in the world, HUD list, flashlights
+    // ================================================================
+    function setupLightPool() {
+        removeLightPool();
+        if (typeof scene === 'undefined') return;
+        for (let i = 0; i < 2; i++) {
+            const l = new THREE.SpotLight(0xfff1c8, 0, 18, 0.45, 0.5, 1);
+            const t = new THREE.Object3D();
+            l.target = t; scene.add(l); scene.add(t);
+            M.lightPool.push({ l: l, t: t });
+        }
+    }
+    function removeLightPool() { M.lightPool.forEach((p) => { if (p.l.parent) p.l.parent.remove(p.l); if (p.t.parent) p.t.parent.remove(p.t); }); M.lightPool = []; }
+    function updRemotes(dt) {
+        const st = S(), api = A();
+        if (!st || !st.active) return;
+        const lit = [];
+        Object.values(M.remote).forEach((r) => {
+            const info = M.players[r.id];
+            if (!remoteActive(r) || !info) { if (r.av) r.av.root.visible = false; return; }
+            const c = interp(r); r.cur = c;
+            const av = avatarFor(r, { name: info.name, color: info.color, hat: info.hat, skin: info.skin });
+            const f = r.st.f || 0, room = r.st.r;
+            const near = Math.abs(room - st.cur) <= 1 && !!st.rooms[room] && st.rooms[room].group.visible !== false;
+            const show = near && !(f & (F.hidden | F.dead | F.escaped)) && !!c;
+            av.root.visible = show;
+            if (!c) return;
+            const px = av.root.position.x, pz = av.root.position.z;
+            av.root.position.set(c.x, 0, c.z);
+            const spd = dt > 0 ? Math.hypot(c.x - px, c.z - pz) / dt : 0;
+            r.spd = (r.spd || 0) + (Math.min(spd, 10) - (r.spd || 0)) * Math.min(1, dt * 8);
+            av.root.rotation.y = c.y + Math.PI;
+            if (r.st.hp < (r.lastHp === undefined ? 100 : r.lastHp)) av.hurt();
+            r.lastHp = r.st.hp;
+            const icon = (f & F.hidden) ? '🫥' : '';
+            av.setTag(info.name, info.color, r.st.hp, icon);
+            av.setItem(r.st.it || null);
+            if (show) av.update({ speed: r.spd, crouch: !!(f & F.crouch), sprint: !!(f & F.sprint), pitch: c.p, light: !!(f & F.light) }, dt, camera.position);
+            if (show && st.dead && M.spectId === r.id) av.hideTag();
+            if (show && (f & F.light) && r.st.it === 'flashlight') lit.push({ r: r, c: c, d: Math.hypot(c.x - camera.position.x, c.z - camera.position.z) });
+        });
+        lit.sort((a, b) => a.d - b.d);
+        M.lightPool.forEach((p, i) => {
+            const e = lit[i];
+            if (!e) { p.l.intensity = 0; return; }
+            const c = e.c, fx = -Math.sin(c.y) * Math.cos(c.p), fy = Math.sin(c.p), fz = -Math.cos(c.y) * Math.cos(c.p);
+            p.l.position.set(c.x + fx * 0.4, c.h - 0.25, c.z + fz * 0.4);
+            p.t.position.set(c.x + fx * 10, c.h - 0.25 + fy * 10, c.z + fz * 10);
+            p.l.intensity = 1.5;
+        });
+    }
+    let listT = 0;
+    function updList(dt) {
+        listT -= dt;
+        if (listT > 0) return;
+        listT = 0.25;
+        const st = S(), api = A(), el = $('mp-list');
+        if (!el || !st) return;
+        const rows = [];
+        const me = { id: PID, name: prof.name, color: prof.color, hp: st.P ? st.P.hp : 0, room: st.cur, f: (st.dead ? F.dead : 0) | (st.won ? F.escaped : 0) | (st.P && st.P.hidden ? F.hidden : 0) };
+        rows.push(me);
+        Object.values(M.remote).forEach((r) => {
+            const info = M.players[r.id];
+            if (!info) return;
+            const act = remoteActive(r);
+            rows.push({ id: r.id, name: info.name, color: info.color, hp: act ? r.st.hp : 0, room: act ? r.st.r : '?', f: act ? r.st.f : 0, off: !act });
+        });
+        el.innerHTML = rows.map((p) => {
+            const stt = p.off ? '📡' : (p.f & F.escaped) ? '🎉' : (p.f & F.dead) ? '💀' : (p.f & F.hidden) ? '🫥' : '';
+            return '<div class="r" style="opacity:' + ((p.f & F.dead) || p.off ? 0.6 : 1) + '"><span class="mp-dot" style="background:' + esc(p.color) + ';width:10px;height:10px"></span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(p.name) + (p.id === PID ? ' (you)' : '') + '</b><span>' + stt + ' ' + (typeof p.room === 'number' ? api.pad3(p.room) : p.room) + '</span></div>' +
+                '<div class="hp"><div style="width:' + clamp(p.hp, 0, 100) + '%;background:' + (p.hp > 60 ? '#22c55e' : p.hp > 30 ? '#f59e0b' : '#ef4444') + '"></div></div></div></div>';
+        }).join('');
+    }
+
+    // ================================================================
+    // DEATH, SPECTATING, RESPAWN, TEAM END
+    // ================================================================
+    function spectCands() { return Object.values(M.remote).filter((r) => remoteActive(r) && !(r.st.f & (F.dead | F.escaped)) && r.cur); }
+    H.spectTarget = function () {
+        const c = spectCands();
+        if (!c.length) return null;
+        const r = c[((M.spectIdx % c.length) + c.length) % c.length];
+        M.spectId = r.id;
+        return { x: r.cur.x, z: r.cur.z, h: r.cur.h, yaw: r.cur.y, room: r.st.r, name: nameOf(r.id), id: r.id };
+    };
+    H.onLocalDeath = function (by, quote, hint) {
+        const el = $('mp-dead');
+        el.querySelector('.q').textContent = quote;
+        el.querySelector('.s').textContent = hint;
+        el.style.display = 'block';
+        el.style.opacity = 1;
+        clearTimeout(M.deadT);
+        M.deadT = setTimeout(() => { el.style.display = 'none'; }, 6500);
+        try { document.exitPointerLock(); } catch (e) { /* ignore */ }
+    };
+    function updSpect(dt) {
+        const st = S(), el = $('mp-spect');
+        if (!st || !st.dead || st.won || M.ended) { el.style.display = 'none'; return; }
+        const t = H.spectTarget();
+        el.style.display = 'block';
+        el.innerHTML = t ? '👀 Spectating <b style="color:' + esc(colorOf(t.id)) + '">' + esc(t.name) + '</b> — <b>← →</b> / click to switch<br><span style="font-size:12px;opacity:.8">You respawn when your team reaches Room ' + A().pad3((st.deathRoom || 0) + 2) + ' (and is not in a chase / library).</span>'
+            : '👀 Nobody left to spectate…';
+        // respawn check
+        M.respawnCheck -= dt;
+        if (M.respawnCheck > 0) return;
+        M.respawnCheck = 0.5;
+        if (st.chase && st.chase.phase !== 'done') return;
+        const need = (st.deathRoom || 0) + 2;
+        for (const r of spectCands()) {
+            const room = st.rooms[r.st.r];
+            if (r.st.r >= need && room && (room.kind === 'normal' || room.kind === 'hallway' || room.kind === 'jeff') && !(st.library && st.library.started && st.library.room && st.library.room.n === r.st.r && !st.library.unlocked)) {
+                const fx = -Math.sin(r.cur.y), fz = -Math.cos(r.cur.y);
+                if (A().respawn(r.st.r, r.cur.x - fx * 1.0, r.cur.z - fz * 1.0)) {
+                    $('mp-dead').style.display = 'none';
+                    A().achieve('reunion', 'Back From The Dead');
+                }
+                return;
+            }
+        }
+    }
+    let endT = 0;
+    function checkTeamEnd(dt) {
+        endT -= dt;
+        if (endT > 0 || M.ended || !M.runStarted) return;
+        endT = 0.6;
+        const st = S();
+        if (!st) return;
+        const meDone = st.dead || st.won;
+        if (!meDone) return;
+        const others = Object.values(M.remote).filter((r) => remoteActive(r));
+        if (others.some((r) => !(r.st.f & (F.dead | F.escaped)))) {
+            if (st.won) showEnd(false);   // escaped: show live status while the team finishes
+            return;
+        }
+        showEnd(true);
+    }
+    H.onLocalWin = function () {
+        const st = S();
+        const alive = Object.values(M.remote).filter((r) => remoteActive(r) && !(r.st.f & F.dead)).length;
+        if (alive >= 1) A().achieve('teamwork', 'Better Together');
+        showEnd(false);
+    };
+    function showEnd(final) {
+        const st = S(), api = A();
+        if (final) M.ended = true;
+        $('mp-spect').style.display = 'none';
+        $('mp-dead').style.display = 'none';
+        try { document.exitPointerLock(); } catch (e) { /* ignore */ }
+        const rows = [{ id: PID, name: prof.name, color: prof.color, f: (st.dead ? F.dead : 0) | (st.won ? F.escaped : 0), room: st.maxRoom, g: st.gold }];
+        Object.values(M.remote).forEach((r) => { const info = M.players[r.id]; if (info && r.st && r.st.rid === M.rid) rows.push({ id: r.id, name: info.name, color: info.color, f: r.st.f, room: r.st.r, g: r.st.g || 0 }); });
+        const esc2 = rows.filter((p) => p.f & F.escaped).length, all = rows.length;
+        const done = rows.every((p) => p.f & (F.dead | F.escaped));
+        $('mp-endt').textContent = !done ? '⏳ WAITING FOR YOUR TEAM' : esc2 === all ? '🎉 THE WHOLE TEAM ESCAPED!' : esc2 > 0 ? '🚪 ' + esc2 + ' / ' + all + ' ESCAPED' : '💀 TEAM WIPED';
+        $('mp-endl').textContent = !done ? 'You made it out! Your teammates are still inside…' : esc2 ? 'Door 101 opens onto a parking lot and a sunset. Not everyone made it, but the tater tots are free.' : 'The Lunch Hotel claims another lunch group. Better luck next time!';
+        $('mp-endtab').innerHTML = rows.map((p) => '<tr><td><span class="mp-dot" style="display:inline-block;background:' + esc(p.color) + ';vertical-align:middle"></span> <b>' + esc(p.name) + '</b></td><td>' + ((p.f & F.escaped) ? '🎉 Escaped' : (p.f & F.dead) ? '💀 Died' : '🏃 Still inside') + '</td><td>Room ' + api.pad3(p.room || 0) + '</td><td>🪙 ' + (p.g || 0) + '</td></tr>').join('');
+        if (done && !M.paid) {
+            M.paid = true;
+            try {
+                $('dr-ends').innerHTML = (api.runStatsLine ? api.runStatsLine() : '');
+                if (window.__drEnd) window.__drEnd(!!st.won, st.deathBy || 'rush');
+            } catch (e) { console.error(e); }
+        }
+        $('mp-ends').innerHTML = done ? $('dr-ends').innerHTML : '';
+        const host = isHost();
+        $('mp-endb').innerHTML = (host && done ? '<button class="dr-btn" id="mp-again">🔁 BACK TO LOBBY</button>' : (done ? '<p style="font-size:12px;opacity:.7">Waiting for the host to go back to the lobby…</p>' : '')) + '<button class="dr-btn" id="mp-quit">🚪 LEAVE GAME</button>';
+        const ag = $('mp-again'); if (ag) ag.onclick = hostBackToLobby;
+        $('mp-quit').onclick = () => { leaveLobby(); if (window.exitDoors) window.exitDoors(); };
+        $('mp-end').style.display = 'flex';
+        $('dr-end').style.display = 'none';
+    }
+
+    // ================================================================
+    // PINGS, EMOTES, CHAT
+    // ================================================================
+    function addPing(x, y, z, who, color, label) {
+        if (typeof scene === 'undefined') return;
+        const g = new THREE.Group();
+        const c = new THREE.Color(color || '#fde047');
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.32, 24), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false }));
+        ring.renderOrder = 998; g.add(ring);
+        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.2, 6), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.6, depthTest: false }));
+        beam.position.y = 0.6; beam.renderOrder = 998; g.add(beam);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tagTexture((label || '❗') + ' ' + who, color || '#fde047', null), depthTest: false, transparent: true }));
+        sp.scale.set(1.2, 0.36, 1); sp.position.y = 1.45; sp.renderOrder = 999; g.add(sp);
+        g.position.set(x, y, z);
+        scene.add(g);
+        M.pings.push({ g: g, t: 0, ring: ring });
+        beep('sine', 880, 1320, 0, 0.12, 0.05);
+    }
+    function updPings(dt) {
+        for (let i = M.pings.length - 1; i >= 0; i--) {
+            const p = M.pings[i];
+            p.t += dt;
+            p.ring.lookAt(camera.position);
+            const s = 1 + Math.sin(p.t * 6) * 0.15; p.ring.scale.set(s, s, s);
+            if (p.t > 6) { scene.remove(p.g); p.g.traverse((o) => { if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } }); M.pings.splice(i, 1); }
+        }
+    }
+    function doPing() {
+        const st = S(), api = A();
+        if (!st || !st.P || st.dead) return;
+        const d = api.lookDir(), o = camera.position;
+        let hit = null;
+        for (let t = 0.3; t < 16; t += 0.15) {
+            const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
+            if (y <= 0.05 || y >= 4.3 || !api.walkable(x, z, 0.05) || api.hitsCol(x, z, 0.02)) { hit = { x: o.x + d.x * (t - 0.15), y: Math.max(0.05, Math.min(4.2, y)), z: o.z + d.z * (t - 0.15) }; break; }
+        }
+        if (!hit) hit = { x: o.x + d.x * 8, y: o.y + d.y * 8, z: o.z + d.z * 8 };
+        // label what we are pointing at
+        let label = '❗', best = 1e9;
+        const room = st.rooms[st.cur];
+        if (room) room.inter.forEach((it) => {
+            if (it.dead) return;
+            const dd = Math.hypot(it.x - hit.x, it.z - hit.z);
+            if (dd < 1.6 && dd < best) { best = dd; label = ({ key: '🔑', hide: '🫥', drawer: '🗄️', gold: '🪙', chest: '🧰', door: '🚪', book: '📖', fuse: '🔌', note: '📝', breaker: '⚡', shop: '🛒', dupe: '⚠️' })[it.kind] || '❗'; }
+        });
+        addPing(hit.x, hit.y, hit.z, prof.name, prof.color, label);
+        H.emit('ping', { x: r2(hit.x), y: r2(hit.y), z: r2(hit.z), l: label });
+    }
+    function openChat() {
+        const st = S(), inp = $('mp-chatin');
+        if (!st || !inp || !M.code) return;
+        st.chatOpen = true;
+        const dk = A().dk; if (dk) dk.w = dk.a = dk.s = dk.d = dk.shift = dk.ctrl = 0;
+        inp.style.display = 'block'; inp.value = '';
+        inp.focus();
+    }
+    function closeChat() {
+        const st = S(), inp = $('mp-chatin');
+        if (st) st.chatOpen = false;
+        if (inp) { inp.style.display = 'none'; inp.blur(); }
+    }
+    $('mp-chatin').addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+            const v = ($('mp-chatin').value || '').trim().slice(0, 120);
+            if (v && M.net && M.code) { M.net.push(base() + '/chat', { f: PID, m: v, ts: now(), rid: M.rid || '' }); }
+            closeChat();
+            try { A().lockPointer(); } catch (er) { /* ignore */ }
+        } else if (e.key === 'Escape') { closeChat(); try { A().lockPointer(); } catch (er) { /* ignore */ } }
+    });
+    window.addEventListener('keydown', (e) => {
+        const st = S();
+        if (!st || !st.active || !M.inRun || !M.runStarted || st.chatOpen || st.padOpen) return;
+        if (e.code === 'KeyT' || e.code === 'Enter') { e.preventDefault(); openChat(); return; }
+        if (e.repeat) return;
+        if (st.dead) {
+            if (e.code === 'ArrowLeft') M.spectIdx--;
+            else if (e.code === 'ArrowRight') M.spectIdx++;
+            return;
+        }
+        if (st.paused || st.cine) return;
+        if (e.code === 'KeyQ') doPing();
+        else if (e.code === 'KeyG') { H.emit('emote', { e: 'wave' }); feed('👋 You wave at your team', prof.color); }
+    });
+    window.addEventListener('mousedown', () => { const st = S(); if (st && st.active && M.inRun && st.dead) M.spectIdx++; });
+
+    // ================================================================
+    // PER-FRAME
+    // ================================================================
+    function mpFrame(dt) {
+        const st = S();
+        if (!st || !st.active) return;
+        if (M.lobbyView && !st.running) { updLineup(dt); return; }
+        if (!M.inRun) return;
+        if (!M.runStarted) {
+            M.countdown = (M.startAt - now()) / 1000;
+            const n = Math.ceil(M.countdown);
+            const el = $('mp-count').querySelector('.n');
+            if (el.textContent !== String(Math.max(1, n))) { el.textContent = String(Math.max(1, n)); beep('triangle', 440, 440, 0, 0.1, 0.05); }
+            sendState(false);
+            updRemotes(dt);
+            if (M.countdown <= 0) beginNow();
+            return;
+        }
+        sendState(false);
+        updRemotes(dt);
+        updList(dt);
+        updSpect(dt);
+        updPings(dt);
+        checkTeamEnd(dt);
+        if (st.P && st.P.hp < M.lastHp - 0.5) { /* hp changed: send right away so the tag updates */ sendState(true); }
+        if (st.P) M.lastHp = st.P.hp;
+    }
+    // keep-alive: if this tab stops drawing frames (alt-tabbed), still tell the team we are here
+    setInterval(() => { try { if (M.inRun && M.code && performance.now() - M.lastSend > 900) sendState(true); } catch (e) { /* ignore */ } }, 1000);
+    const origTick = window.doorsTick;
+    window.doorsTick = function (dt) {
+        origTick(dt);
+        try { mpFrame(dt); } catch (e) { console.error('MP frame', e); }
+    };
+    window.__mpDebug = { M: M, PID: PID, prof: prof, connect: connect, createLobby: createLobby, joinLobby: joinLobby, startRunHost: startRunHost, hostBackToLobby: hostBackToLobby, leaveLobby: leaveLobby };
+})();
     </script>
 </body>
 </html>
