@@ -12044,29 +12044,22 @@
 })();
 
     </script>
-    <script id="doors-mp">
-// ================================================================
-// DOORS MULTIPLAYER (Firebase Realtime Database, or a local test mode)
-// ----------------------------------------------------------------
-//  * Paste your Firebase web config into FIREBASE_CONFIG below
-//    (or paste it in-game: DOORS -> PLAY WITH FRIENDS -> Firebase setup).
-//  * See README.md for the full step-by-step setup.
-// ================================================================
-(function () {
-    'use strict';
-
-    // ===================== PUT YOUR FIREBASE CONFIG HERE =====================
-    // Example:
-    // const FIREBASE_CONFIG = {
-    //     apiKey: "AIza...",
-    //     authDomain: "my-doors.firebaseapp.com",
-    //     databaseURL: "https://my-doors-default-rtdb.firebaseio.com",
-    //     projectId: "my-doors",
-    //     storageBucket: "my-doors.appspot.com",
-    //     messagingSenderId: "1234567890",
-    //     appId: "1:1234567890:web:abcdef"
-    // };
-    const firebaseConfig = {
+    <script id="doors-firebase-config">
+// ===================== PUT YOUR FIREBASE CONFIG HERE =====================
+// Paste the firebaseConfig block from Firebase (Project settings -> Your apps)
+// right here, replacing the line below. Paste ONLY the "const firebaseConfig = { ... };"
+// part, not the "import ..." or "initializeApp" lines. It should look like:
+//
+// const firebaseConfig = {
+//   apiKey: "AIza...",
+//   authDomain: "my-doors.firebaseapp.com",
+//   databaseURL: "https://my-doors-default-rtdb.firebaseio.com",
+//   projectId: "my-doors",
+//   storageBucket: "my-doors.appspot.com",
+//   messagingSenderId: "1234567890",
+//   appId: "1:1234567890:web:abcdef"
+// };
+const firebaseConfig = {
   apiKey: "AIzaSyCyy27mYyM8zDln8kbSkVl_VcRr7X9hQB4",
   authDomain: "doors-with-friends.firebaseapp.com",
   databaseURL: "https://doors-with-friends-default-rtdb.firebaseio.com",
@@ -12075,7 +12068,20 @@
   messagingSenderId: "118423564201",
   appId: "1:118423564201:web:a277c64f42ede680039eb8"
 };
-    // =========================================================================
+// =========================================================================
+window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game the block above has no typos)
+    </script>
+    <script id="doors-mp">
+// ================================================================
+// DOORS MULTIPLAYER (Firebase Realtime Database, or a local test mode)
+// ----------------------------------------------------------------
+//  * Paste your Firebase web config into the "doors-firebase-config" block just above
+//    (or paste it in-game: DOORS -> PLAY WITH FRIENDS -> Firebase setup).
+//  * See README.md for the full step-by-step setup.
+// ================================================================
+(function () {
+    'use strict';
+
 
     const FB_VER = '10.12.2';
     const ROOT = 'doorsMP/v1/lobbies';
@@ -12135,7 +12141,17 @@
             return o.apiKey && o.databaseURL ? o : null;
         } catch (e) { return null; }
     }
-    function savedConfig() { return parseConfig(FIREBASE_CONFIG) || parseConfig(LS.get('doors_fb_config', null)); }
+    // accepts: const firebaseConfig = {...} (Firebase's own snippet), const FIREBASE_CONFIG = {...},
+    // window.DOORS_FIREBASE_CONFIG, or a config pasted in-game (saved in localStorage)
+    function fileConfig() {
+        let c = null;
+        try { if (typeof firebaseConfig !== 'undefined' && firebaseConfig) c = firebaseConfig; } catch (e) { /* ignore */ }
+        try { if (!c && typeof FIREBASE_CONFIG !== 'undefined' && FIREBASE_CONFIG) c = FIREBASE_CONFIG; } catch (e) { /* ignore */ }
+        if (!c && window.DOORS_FIREBASE_CONFIG) c = window.DOORS_FIREBASE_CONFIG;
+        return parseConfig(c);
+    }
+    function savedConfig() { return fileConfig() || parseConfig(LS.get('doors_fb_config', null)); }
+    const CFG_BLOCK_BROKEN = !window.__doorsCfgLoaded;
 
     // ================================================================
     // NETWORK BACKENDS (same tiny API for Firebase and local test mode)
@@ -12399,11 +12415,20 @@
         }
     }
     function renderPanel() {
+        try { renderPanelInner(); } catch (e) {
+            console.error('MP panel', e);
+            panel.innerHTML = '<h2>👥 PLAY WITH FRIENDS</h2><div id="mp-status" class="err">⚠️ Something went wrong showing this screen:<br><code style="font-size:11px">' + esc(e && e.message ? e.message : e) + '</code><br><br>If you just edited the Firebase config in index.html, double-check it against README.md.</div>' +
+                '<div class="mp-row" style="margin-top:14px"><button class="mp-b gray" id="mp-back">⬅ BACK TO SOLO</button></div>';
+            const bk = $('mp-back'); if (bk) bk.onclick = () => { try { closeLobby(); } catch (er) { panel.style.display = 'none'; if (drRoot) drRoot.classList.remove('mp-lobby'); $('dr-intro').style.display = 'flex'; } };
+        }
+    }
+    function renderPanelInner() {
         if (drRoot) drRoot.classList.toggle('mp-lobby', !!M.lobbyView);
         if (!M.lobbyView) { panel.style.display = 'none'; return; }
         panel.style.display = 'block';
         const cfgOk = !!savedConfig();
         let h = '<h2>👥 PLAY WITH FRIENDS</h2><div class="sub">Everyone gets the same hotel. Chases and the Library pull the whole team in. Dead players spectate and respawn when the team pushes 2 rooms further.</div>';
+        if (CFG_BLOCK_BROKEN) h += '<div id="mp-status" class="err">⚠️ The Firebase config block in index.html has a typo, so it was skipped. Paste ONLY the <b>const firebaseConfig = { ... };</b> part (no import / initializeApp lines). See README.md.</div>';
         h += '<div id="mp-status" class="' + (M.err ? 'err' : M.net ? 'ok' : '') + '">' + (M.err ? '⚠️ ' + esc(M.err) : M.net ? (M.net.kind === 'fire' ? '🟢 Connected to Firebase' : '🧪 Local test mode (only tabs in this browser)') : (M.connecting ? '⏳ Connecting…' : (cfgOk ? '🔥 Firebase config found — press ONLINE to connect.' : '🔥 Firebase is not set up yet. Paste your config below (see README.md), or try Local test mode.'))) + '</div>';
         // profile
         h += '<h3>Your look</h3><div class="mp-row"><input type="text" id="mp-name" maxlength="16" value="' + esc(prof.name) + '" style="flex:1"></div>';

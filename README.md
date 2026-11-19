@@ -91,16 +91,16 @@ const firebaseConfig = {
 You can do either of these:
 
 **Option A: in the file (works for everyone you send the file to).**
-Open `index.html` in a text editor and search for `PUT YOUR FIREBASE CONFIG HERE`. Change
+Open `index.html` in a text editor and search for `PUT YOUR FIREBASE CONFIG HERE`. Just below it is this line:
 
 ```js
-const FIREBASE_CONFIG = null;
+const firebaseConfig = null;
 ```
 
-to your config, for example:
+Replace that **one line** with the block you copied from Firebase:
 
 ```js
-const FIREBASE_CONFIG = {
+const firebaseConfig = {
   apiKey: "AIza....",
   authDomain: "doors-with-friends.firebaseapp.com",
   databaseURL: "https://doors-with-friends-default-rtdb.firebaseio.com",
@@ -110,6 +110,8 @@ const FIREBASE_CONFIG = {
   appId: "1:1234567890:web:abcdef123456"
 };
 ```
+
+> ⚠️ Paste **only** the `const firebaseConfig = { ... };` part. Firebase also shows lines like `import { initializeApp } ...` and `const app = initializeApp(...)`. **Don't** paste those, and don't leave the old `const firebaseConfig = null;` line in as well. If something is off, the multiplayer screen tells you the config block has a typo.
 
 **Option B: in-game (saved only on that computer).**
 Open **DOORS → 👥 PLAY WITH FRIENDS**, paste the whole `const firebaseConfig = {...}` block into the **Firebase setup** box, and press **💾 SAVE CONFIG**.
@@ -161,6 +163,7 @@ On the multiplayer screen, **🧪 LOCAL TEST** connects tabs **in the same brows
 | --- | --- |
 | "Could not connect to your Firebase Realtime Database" | The `databaseURL` is wrong or missing. Copy it from the top of the Realtime Database **Data** tab. |
 | "Permission denied" | Set the **Rules** from step 3 and press **Publish**. |
+| "The Firebase config block … has a typo" | You pasted extra lines (like `import …`) or left `const firebaseConfig = null;` in. Keep only one `const firebaseConfig = { … };`. |
 | "No lobby with code …" | Check the code. Everyone must use the same Firebase config. |
 | A friend shows as 📡 | Their connection dropped or their tab is in the background. They come back when they return. |
 | Lag | Firebase is fast, but very far-apart players can see small hiccups. Pick a database location near you. |
