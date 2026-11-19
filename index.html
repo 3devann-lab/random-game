@@ -4986,14 +4986,20 @@
     const EYE_H = 1.65;
 
     // ---------- tiny utils ----------
-    const rnd = (a, b) => a + Math.random() * (b - a);
+    const rnd = (a, b) => a + R() * (b - a);
     const rint = (a, b) => Math.floor(rnd(a, b + 1));
-    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const pick = (arr) => arr[Math.floor(R() * arr.length)];
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    // Fisher-Yates (sort with a random comparator gives different results in Chrome vs Firefox vs Safari)
+    function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); const t = arr[i]; arr[i] = arr[j]; arr[j] = t; } return arr; }
     const pad3 = (n) => String(n).padStart(3, '0');
 
     // ---------- seeded generation (same seed = same hotel, used by multiplayer + seeded runs) ----------
     const REAL_RANDOM = Math.random;
+    // all DOORS randomness goes through R(): seeded while a room is being generated, normal otherwise.
+    // (We never touch Math.random itself, so three.js object ids can't knock the hotel off its seed.)
+    let RNG = REAL_RANDOM;
+    function R() { return RNG(); }
     function mulberry32(a) {
         return function () {
             a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -5017,9 +5023,9 @@
     // run fn with Math.random replaced by a PRNG seeded from (run seed, key)
     function withSeed(key, fn) {
         if (!S || S.seed === undefined || S.seed === null) return fn();
-        const prev = Math.random;
-        Math.random = mulberry32(hashStr(S.seed + ':' + key));
-        try { return fn(); } finally { Math.random = prev; }
+        const prev = RNG;
+        RNG = mulberry32(hashStr(S.seed + ':' + key));
+        try { return fn(); } finally { RNG = prev; }
     }
 
     // ---------- multiplayer hooks (filled in by the doors-mp script) ----------
@@ -5089,7 +5095,7 @@
         const n = Math.max(1, Math.floor(self.ctx.sampleRate * dur));
         const buf = self.ctx.createBuffer(1, n, self.ctx.sampleRate);
         const data = buf.getChannelData(0);
-        for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
+        for (let i = 0; i < n; i++) data[i] = R() * 2 - 1;
         const src = self.ctx.createBufferSource();
         src.buffer = buf;
         const filt = self.ctx.createBiquadFilter();
@@ -5133,6 +5139,8 @@
     #dr-room{position:absolute;top:14px;left:18px;text-shadow:0 0 12px #000}
     #dr-room .n{font-size:34px;font-weight:bold;letter-spacing:4px;color:#fbbf24}
     #dr-room .t{font-size:12px;opacity:.8;letter-spacing:2px;text-transform:uppercase}
+    #dr-room.flash .n,#dr-room.flash .t{animation:drRoomIn 1.4s ease-out}
+    @keyframes drRoomIn{0%{opacity:0;transform:translateY(-8px);letter-spacing:9px}35%{opacity:1}100%{transform:none}}
     #dr-hp{position:absolute;top:14px;right:18px;width:210px;text-align:right}
     .dr-bar{height:12px;border:2px solid #92400e;border-radius:8px;background:#1c1208;overflow:hidden;margin-top:4px}
     .dr-bar>div{height:100%;transition:width .15s}
@@ -5235,7 +5243,7 @@
         stopwatch: { icon: '⏱️', name: 'Calm Watch' },
         book:      { icon: '📕', name: 'Loud Book' }
     };
-    window.__doorsInternals = { rnd, rint, pick, clamp, pad3, geo, mat, basic, labelPlane, labelTexture, $, ITEM_DEFS };
+    window.__doorsInternals = { R, rnd, rint, pick, clamp, pad3, geo, mat, basic, labelPlane, labelTexture, $, ITEM_DEFS };
 
     // ============================================================
     // STATE
@@ -5294,12 +5302,12 @@
     function fit(room, w, d, o) {
         o = o || {};
         for (let i = 0; i < 40; i++) {
-            const wall = o.wall !== false && Math.random() < 0.8;
+            const wall = o.wall !== false && R() < 0.8;
             let x;
-            if (wall) x = (Math.random() < 0.5 ? -1 : 1) * (room.W / 2 - w / 2 - 0.12);
+            if (wall) x = (R() < 0.5 ? -1 : 1) * (room.W / 2 - w / 2 - 0.12);
             else x = rnd(-(room.W / 2 - w / 2 - 0.3), room.W / 2 - w / 2 - 0.3);
             const z = rnd(room.z1 + 3.2 + d / 2, room.z0 - 2.2 - d / 2);
-            if (!o.center && Math.abs(x) - w / 2 < 1.5) continue;
+            if (!o.center && !room.noLane && Math.abs(x - laneX(room, z)) - w / 2 < 1.5) continue;
             let ok = true;
             for (const r of room.placed) {
                 if (Math.abs(r.x - x) < (r.w + w) / 2 + 0.45 && Math.abs(r.z - z) < (r.d + d) / 2 + 0.45) { ok = false; break; }
@@ -5310,6 +5318,11 @@
             return rect;
         }
         return null;
+    }
+    // the line you naturally walk along: from the door you came in through to the exit door
+    function laneX(room, z) {
+        const k = clamp((room.z0 - z) / Math.max(1, room.D), 0, 1);
+        return (room.entryX || 0) + ((room.doorX || 0) - (room.entryX || 0)) * k;
     }
     function addInter(room, o) {
         o.room = room; o.cone = o.cone || 0.9; o.reach = o.reach || 3.0;
@@ -5367,7 +5380,7 @@
         const face = r.x < 0 ? 1 : -1;
         box(room, 0.62, 0.95, 1.7, r.x, 0, r.z, 0x6b4423, { collide: true });
         box(room, 0.7, 0.06, 1.78, r.x, 0.95, r.z, 0x7d5430);
-        if (Math.random() < 0.7) cyl(room, 0.1, 0.13, 0.3, r.x, 1.01, r.z + rnd(-0.5, 0.5), pick([0x3a6a9a, 0x9a3a3a, 0xe8e0c8]));
+        if (R() < 0.7) cyl(room, 0.1, 0.13, 0.3, r.x, 1.01, r.z + rnd(-0.5, 0.5), pick([0x3a6a9a, 0x9a3a3a, 0xe8e0c8]));
         [-0.43, 0.43].forEach((dz) => {
             const dm = box(room, 0.12, 0.5, 0.74, r.x + face * 0.32, 0.3, r.z + dz, 0x805230);
             box(room, 0.06, 0.07, 0.24, r.x + face * 0.4, 0.62, r.z + dz, 0xc9a227);
@@ -5426,7 +5439,7 @@
         const r = fit(room, 1.0, 1.0, { wall: false });
         if (!r) return;
         box(room, 1.0, 0.9, 1.0, r.x, 0, r.z, 0x8a6a3a, { collide: true });
-        if (Math.random() < 0.6) box(room, 0.7, 0.7, 0.7, r.x + 0.1, 0.9, r.z - 0.1, 0x7a5a2a);
+        if (R() < 0.6) box(room, 0.7, 0.7, 0.7, r.x + 0.1, 0.9, r.z - 0.1, 0x7a5a2a);
         room.crates = (room.crates || 0) + 1;
     }
     function addChest(room) {
@@ -5447,7 +5460,8 @@
         }
         g.position.set(x, y, z);
         room.group.add(g);
-        addInter(room, { kind: 'gold', x: x, y: y + 0.1, z: z, amt: amt, mesh: g, label: 'Take gold', reach: 2.6, cone: 0.85 });
+        const gi = addInter(room, { kind: 'gold', x: x, y: y + 0.1, z: z, amt: amt, mesh: g, label: 'Take gold', reach: 2.6, cone: 0.85 });
+        if (room.n >= 10 && R() < 0.06) { gi.mimic = true; room.mimics = (room.mimics || []).concat([g]); }
     }
     function addKey(room, x, y, z) {
         const g = new THREE.Group();
@@ -5468,11 +5482,11 @@
     }
     function fillEyes(room, n) {
         for (let i = 0; i < n; i++) {
-            const t = Math.random();
+            const t = R();
             const z = rnd(room.z1 + 1, room.z0 - 1);
-            if (t < 0.55) addEye(room, (Math.random() < 0.5 ? -1 : 1) * (room.W / 2 - 0.25), rnd(0.6, 3.8), z, rnd(0.7, 1.6));
+            if (t < 0.55) addEye(room, (R() < 0.5 ? -1 : 1) * (room.W / 2 - 0.25), rnd(0.6, 3.8), z, rnd(0.7, 1.6));
             else if (t < 0.8) addEye(room, rnd(-room.W / 2 + 1, room.W / 2 - 1), WALL_H - 0.25, z, rnd(0.8, 1.5));
-            else addEye(room, (Math.random() < 0.5 ? -1 : 1) * rnd(2.2, room.W / 2 - 0.6), rnd(1, 3.8), room.z1 + 0.35, rnd(0.8, 1.6));
+            else addEye(room, (R() < 0.5 ? -1 : 1) * rnd(2.2, room.W / 2 - 0.6), rnd(1, 3.8), room.z1 + 0.35, rnd(0.8, 1.6));
         }
     }
 
@@ -5497,7 +5511,7 @@
         const ch = chaseAt(n);
         if (ch) return n === ch[0] ? 'chasestart' : 'chase';
         if (n === TOTAL_ROOMS - 1) return 'hallway';
-        if (n >= 8 && Math.random() < 0.2) return 'hallway';
+        if (n >= 8 && R() < 0.2) return 'hallway';
         return 'normal';
     }
     function chaseIndexOf(n) {
@@ -5507,26 +5521,56 @@
     }
     function isPreEyes(n) { if (inOverride(n)) return false; return CHASES.some((c) => n >= c[0] - (c[2] === 1 ? 3 : 2) && n < c[0]); }
 
+    // rooms whose entrance must stay in the middle (scripted set pieces)
+    function centeredRoom(n) {
+        if (n <= 0 || n >= TOTAL_ROOMS - 1 || n === LIB_ROOM || n === JEFF_ROOM || n === JEFF_ROOM2) return true;
+        if (inOverride(n)) return true;
+        return !!chaseAt(n);
+    }
     function createRoom(n) {
         const kind = kindFor(n);
         const prev = S.rooms[n - 1];
         const z0 = prev ? prev.z1 : 0;
-        let W = 12, D = rint(15, 22);
+        const entryX = prev && prev.doorX ? prev.doorX : 0;
+        let W = 12, D = rint(15, 22), layout = 'standard';
         if (kind === 'lobby') { W = 14; D = 20; }
-        else if (kind === 'hallway') { W = 6.5; D = rint(30, 38); }
+        else if (kind === 'hallway') { W = pick([6.5, 6.5, 7.5, 8.5]); D = rint(28, 38); layout = 'hall'; }
         else if (kind === 'jeff') { W = 12; D = 16; }
         else if (kind === 'chasestart') { W = 8; D = 38; }
         else if (kind === 'chase') { W = 12; D = 24; }
         else if (kind === 'library') { W = 22; D = 46; }
         else if (kind === 'boss') { W = 26; D = 52; }
-        else { W = rint(10, 15); }
+        else {
+            // normal rooms come in very different shapes now
+            const r = R();
+            if (n < 3) layout = 'standard';
+            else if (r < 0.34) layout = 'standard';
+            else if (r < 0.50) layout = 'wide';
+            else if (r < 0.62) layout = 'long';
+            else if (r < 0.72) layout = 'closet';
+            else if (r < 0.87) layout = 'maze';
+            else layout = 'pillars';
+            if (layout === 'standard') { W = rint(10, 15); D = rint(15, 22); }
+            else if (layout === 'wide') { W = rint(17, 21); D = rint(12, 16); }
+            else if (layout === 'long') { W = rint(9, 11); D = rint(25, 31); }
+            else if (layout === 'closet') { W = 8; D = rint(10, 12); }
+            else if (layout === 'maze') { W = rint(12, 16); D = rint(22, 28); }
+            else { W = rint(15, 19); D = rint(18, 24); }
+        }
+        // a room must be wide enough for the (possibly off-centre) door you walk in through
+        W = Math.min(SLAB_W - 1, Math.max(W, Math.abs(entryX) * 2 + DOOR_W + 1.4));
         const pal = pick(PALETTES);
         const room = {
             n: n, kind: kind, z0: z0, z1: z0 - D, W: W, D: D, H: WALL_H, pal: pal,
             group: new THREE.Group(), col: [], inter: [], lamps: [], hides: [], drawers: [], tables: [], placed: [], eyes: [],
             title: '', dark: false, door: null, entered: false, eventDone: false, chaseIdx: chaseIndexOf(n),
-            keyObj: null, hasLockedDoor: false, spawnT: 0, visited: 0
+            keyObj: null, hasLockedDoor: false, spawnT: 0, visited: 0, layout: layout, entryX: entryX, doorX: 0
         };
+        // exit door: often off to one side, so the hotel zig-zags instead of being one straight line
+        if ((kind === 'normal' || kind === 'hallway') && !centeredRoom(n + 1) && R() < 0.62) {
+            const lim = Math.max(0, Math.min(W / 2 - DOOR_W / 2 - 0.9, 5.5));
+            if (lim > 0.8) room.doorX = Math.round((R() < 0.5 ? -1 : 1) * rnd(Math.min(1.2, lim), lim) * 10) / 10;
+        }
         S.root.add(room.group);
         S.rooms[n] = room;
         buildShell(room);
@@ -5541,13 +5585,17 @@
             default: buildNormal(room);
         }
         // door (north slab)
-        const needsLock = (kind === 'normal' || kind === 'hallway') && n >= 4 && n < TOTAL_ROOMS - 2 && !isPreEyes(n) && Math.random() < 0.2 && !(S.rooms[n - 1] && S.rooms[n - 1].hasLockedDoor);
+        const needsLock = (kind === 'normal' || kind === 'hallway') && n >= 4 && n < TOTAL_ROOMS - 2 && !isPreEyes(n) && R() < 0.2 && !(S.rooms[n - 1] && S.rooms[n - 1].hasLockedDoor);
         room.hasLockedDoor = needsLock;
         buildDoor(room, needsLock);
         if (needsLock) placeKeyFor(room);
+        if (kind === 'normal' && room.layout !== 'closet') {
+            if (room.wantSafe || (n >= 8 && R() < 0.1)) addSafe(room);
+            if (!needsLock && n >= 18 && !isPreEyes(n) && !inOverride(n) && R() < 0.08) setupPowerRoom(room);
+        }
         if (isPreEyes(n)) fillEyes(room, kind === 'hallway' ? 26 : 34);
         if (kind === 'normal' && inOverride(n) && S.gen.kind === 'dark') room.dark = true;
-        else if (n >= 8 && kind === 'normal' && !isPreEyes(n) && !inOverride(n) && Math.random() < 0.16) { room.dark = true; }
+        else if (n >= 8 && kind === 'normal' && !isPreEyes(n) && !inOverride(n) && R() < 0.16) { room.dark = true; }
         if (room.dark) darkenRoom(room, true);
         if (room.kind === 'normal' && !room.title) room.title = 'Hotel Room';
         return room;
@@ -5571,44 +5619,294 @@
     }
 
 
-    // ---------- normal rooms ----------
+    // ---------- normal rooms: layouts + themed set pieces ----------
+    function reserve(room, x, z, w, d) { room.placed.push({ x: x, z: z, w: w, d: d }); }
+    function wallPiece(room, w, d, x, z) {
+        // an interior wall with the room's wallpaper, trim and collision
+        const m = tmat(texWallpaper(room.pal.wall), 'wp' + room.pal.wall, Math.max(w, d) / 2.2, WALL_H / 2.2);
+        const me = new THREE.Mesh(texMeshGeo(geo(w, WALL_H, d), m), m);
+        me.position.set(x, WALL_H / 2, z); room.group.add(me);
+        box(room, w + 0.04, 1.1, d + 0.04, x, 0, z, 0x3a2412);
+        box(room, w + 0.08, 0.08, d + 0.08, x, 1.1, z, 0xb8901f, { emissive: 0x2a1e00 });
+        room.col.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 });
+        reserve(room, x, z, w, d);
+    }
+    // MAZE: partition walls with gaps on alternating sides, so you have to snake through
+    function addMazeWalls(room) {
+        room.noLane = true;
+        const k = room.D >= 25 ? 3 : 2, half = room.W / 2, GAP = 2.7;
+        let side = (room.entryX || 0) > 0.5 ? -1 : (room.entryX || 0) < -0.5 ? 1 : (R() < 0.5 ? -1 : 1);
+        room.maze = [];
+        for (let i = 0; i < k; i++) {
+            const z = room.z0 - room.D * (i + 1) / (k + 1);
+            const wl = room.W - GAP;
+            const cx = side > 0 ? -half + wl / 2 : half - wl / 2;     // wall hugs the other side
+            wallPiece(room, wl, 0.35, cx, z);
+            const gx = side * (half - GAP / 2);
+            reserve(room, gx, z, GAP + 0.3, 4.2);                         // keep the gap clear of furniture
+            room.maze.push({ z: z, gx: gx });
+            side = -side;
+        }
+        // the exit door sits at the end of the last corridor... keep its approach clear too
+        reserve(room, room.doorX || 0, room.z1 + 1.6, 2.6, 3.2);
+    }
+    // PILLARS: a grand hall with two rows of columns
+    function addPillars(room) {
+        const px = Math.max(3.2, room.W / 2 - 3.4);
+        for (let z = room.z0 - 4.5; z > room.z1 + 4; z -= 4.6) {
+            [-1, 1].forEach((s) => {
+                const x = s * px;
+                if (Math.abs(x - laneX(room, z)) < 2.2) return;
+                box(room, 0.8, WALL_H, 0.8, x, 0, z, 0x6a5a48, { collide: true });
+                box(room, 1.05, 0.25, 1.05, x, 0, z, 0x3e352f);
+                box(room, 1.05, 0.25, 1.05, x, WALL_H - 0.25, z, 0x3e352f);
+                reserve(room, x, z, 0.9, 0.9);
+            });
+        }
+    }
+    function addCounter(room, color, top) {
+        const r = fit(room, 0.9, 2.4);
+        if (!r) return null;
+        const face = r.x < 0 ? 1 : -1;
+        box(room, 0.9, 0.95, 2.4, r.x, 0, r.z, color || 0x6b4423, { collide: true });
+        box(room, 1.0, 0.07, 2.5, r.x, 0.95, r.z, top || 0xd8d0c0);
+        [-0.6, 0.6].forEach((dz) => {
+            const dm = box(room, 0.1, 0.42, 0.9, r.x + face * 0.43, 0.35, r.z + dz, 0x805230);
+            box(room, 0.06, 0.05, 0.26, r.x + face * 0.5, 0.62, r.z + dz, 0xc9a227);
+            const d = { kind: 'drawer', mesh: dm, baseX: r.x + face * 0.43, face: face, open: false, t: 0, hasKey: false, x: r.x + face * 0.7, y: 0.62, z: r.z + dz, label: 'Open drawer', reach: 2.3, cone: 0.88 };
+            addInter(room, d); room.drawers.push(d);
+        });
+        room.tables.push({ x: r.x, z: r.z, top: 1.0, w: 0.9, d: 2.4 });
+        return r;
+    }
+    function addTallHide(room, label, color, door, w) {
+        // generic tall hiding spot (fridge, stall, coat closet...)
+        w = w || 0.9;
+        const r = fit(room, w, 0.9);
+        if (!r) return null;
+        const face = r.x < 0 ? 1 : -1;
+        box(room, w, 2.6, 0.9, r.x, 0, r.z, color, { collide: true });
+        box(room, 0.05, 2.4, 0.8, r.x + face * (w / 2 + 0.01), 0.1, r.z, door || color);
+        box(room, 0.07, 0.4, 0.05, r.x + face * (w / 2 + 0.05), 1.2, r.z + 0.28, 0xc0c0c8);
+        const spot = { kind: 'locker', x: r.x, z: r.z, face: face, camY: 1.6, exitX: r.x + face * (w / 2 + 0.6), exitZ: r.z, yaw: face > 0 ? -Math.PI / 2 : Math.PI / 2, room: room };
+        room.hides.push(spot);
+        addInter(room, { kind: 'hide', spot: spot, x: r.x + face * (w / 2 + 0.2), y: 1.4, z: r.z, label: label, cone: 0.82, reach: 2.5 });
+        return spot;
+    }
+    function lampCol(room, col, base) { room.lamps.forEach((l) => { l.col = col; if (base !== undefined) l.base = base; }); }
+    function freeSpot(room, w, d) { const r = fit(room, w, d, { wall: false }); return r; }
+
+    const THEME_BUILD = {
+        kitchen(room) {
+            for (let i = 0; i < rint(2, 3); i++) addCounter(room, 0x8a8a92, 0xe8e8e8);
+            const st = fit(room, 1.0, 1.6);
+            if (st) {
+                box(room, 1.0, 0.95, 1.6, st.x, 0, st.z, 0x2a2a30, { collide: true });
+                [-0.4, 0.4].forEach((dz) => { const b = new THREE.Mesh(new THREE.CircleGeometry(0.17, 12), basic(0xff4a1a)); b.rotation.x = -Math.PI / 2; b.position.set(st.x, 0.96, st.z + dz); room.group.add(b); });
+                cyl(room, 0.2, 0.18, 0.3, st.x, 0.96, st.z - 0.4, 0x7a7a82);
+                room.lamps.push({ x: st.x, y: 1.2, z: st.z, mesh: null, base: 0.3, col: 0xff6a2a });
+            }
+            addTallHide(room, 'Hide in the walk-in fridge', 0xd8dde2, 0xc8ced4, 1.1);
+            for (let i = 0; i < 4; i++) { const p = cyl(room, 0.16, 0.14, 0.12, rnd(-room.W / 3, room.W / 3), WALL_H - 0.9, rnd(room.z1 + 3, room.z0 - 3), 0x9a9aa2); p.rotation.z = rnd(-0.3, 0.3); }
+            room.sound = 'kitchen';
+        },
+        ballroom(room) {
+            const fl = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(room.W - 4, 9), Math.min(room.D - 6, 10)), tmat(texCheck(), 'check', 3, 3));
+            fl.rotation.x = -Math.PI / 2; fl.position.set(0, 0.014, (room.z0 + room.z1) / 2); room.group.add(fl);
+            const pr = fit(room, 1.6, 2.2);
+            if (pr) {
+                box(room, 1.6, 1.0, 2.2, pr.x, 0, pr.z, 0x111114, { collide: true });
+                box(room, 1.62, 0.04, 2.0, pr.x, 1.0, pr.z, 0x1c1c22);
+                box(room, 0.25, 0.05, 1.9, pr.x + (pr.x < 0 ? 0.68 : -0.68), 0.92, pr.z, 0xf5f5f0);
+                room.piano = { x: pr.x, z: pr.z };
+            }
+            for (let i = 0; i < rint(2, 4); i++) { const t = freeSpot(room, 1.4, 1.4); if (!t) break; cyl(room, 0.7, 0.7, 0.08, t.x, 0.78, t.z, 0xf3ece0); cyl(room, 0.08, 0.12, 0.78, t.x, 0, t.z, 0x3a210f); room.col.push({ x0: t.x - 0.6, x1: t.x + 0.6, z0: t.z - 0.6, z1: t.z + 0.6 }); room.tables.push({ x: t.x, z: t.z, top: 0.86, w: 1.2, d: 1.2 }); cyl(room, 0.05, 0.07, 0.25, t.x, 0.86, t.z, 0xd4af37); }
+            const ch = new THREE.Group();
+            ch.add(new THREE.Mesh(new THREE.CylinderGeometry(1.0, 0.5, 0.35, 14), mat(0xd4af37, 0x5a4000)));
+            for (let k = 0; k < 10; k++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), basic(0xfff3c0)); const a = k / 10 * Math.PI * 2; b.position.set(Math.cos(a) * 0.95, 0.2, Math.sin(a) * 0.95); ch.add(b); }
+            ch.position.set(0, WALL_H - 0.45, (room.z0 + room.z1) / 2); room.group.add(ch);
+            room.lamps.push({ x: 0, y: WALL_H - 0.8, z: (room.z0 + room.z1) / 2, mesh: null, base: 0.9, col: 0xfff0c8 });
+            for (let i = 0; i < 2; i++) addTallHide(room, 'Hide in the coat check', 0x5b3a1e, 0x6e4a28, 1.0);
+            room.sound = 'music';
+        },
+        greenhouse(room) {
+            const f = freeSpot(room, 2.6, 2.6);
+            if (f) {
+                cyl(room, 1.25, 1.35, 0.55, f.x, 0, f.z, 0x8a8a80);
+                const w = new THREE.Mesh(new THREE.CircleGeometry(1.1, 18), basic(0x2a5a7a, { transparent: true, opacity: 0.85 })); w.rotation.x = -Math.PI / 2; w.position.set(f.x, 0.5, f.z); room.group.add(w);
+                cyl(room, 0.18, 0.25, 1.1, f.x, 0.5, f.z, 0x9a9a90);
+                room.col.push({ x0: f.x - 1.2, x1: f.x + 1.2, z0: f.z - 1.2, z1: f.z + 1.2 });
+                room.fountain = f;
+            }
+            for (let i = 0; i < rint(5, 8); i++) addPlant(room);
+            for (let i = 0; i < 10; i++) { const s = i % 2 ? 1 : -1; box(room, 0.04, rnd(1.2, 3.2), rnd(0.15, 0.4), s * (room.W / 2 - 0.03), rnd(0.5, 1.5), rnd(room.z1 + 1, room.z0 - 1), 0x2f6a2f); }
+            for (let i = 0; i < 2; i++) addWindowDeco(room);
+            lampCol(room, 0x9ec8ff, 0.7);
+            room.sound = 'water';
+        },
+        restroom(room) {
+            for (let i = 0; i < rint(2, 4); i++) addTallHide(room, 'Hide in the stall', 0x6a7a8a, 0x7a8a9a, 1.0);
+            for (let i = 0; i < rint(1, 2); i++) {
+                const r = fit(room, 0.7, 1.4);
+                if (!r) break;
+                const face = r.x < 0 ? 1 : -1;
+                box(room, 0.7, 0.85, 1.4, r.x, 0, r.z, 0xe8e8e0, { collide: true });
+                const mir = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.9), basic(0x6a7a8a)); mir.rotation.y = face > 0 ? Math.PI / 2 : -Math.PI / 2; mir.position.set(r.x - face * 0.3, 1.9, r.z); room.group.add(mir);
+                room.mirrors = (room.mirrors || []).concat([mir]);
+            }
+            const tiles = new THREE.Mesh(new THREE.PlaneGeometry(room.W - 0.3, room.D - 0.3), tmat(texCheck(0xd8d8d0, 0x8a9aa0), 'tile', room.W / 2, room.D / 2));
+            tiles.rotation.x = -Math.PI / 2; tiles.position.set(0, 0.011, (room.z0 + room.z1) / 2); room.group.add(tiles);
+            lampCol(room, 0xdff4ff, 0.75);
+            room.sound = 'drip';
+        },
+        office(room) {
+            for (let i = 0; i < rint(2, 3); i++) {
+                const d = freeSpot(room, 1.8, 1.0);
+                if (!d) break;
+                box(room, 1.8, 0.1, 1.0, d.x, 0.75, d.z, 0x5a3a1c, { collide: true });
+                [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach((q) => box(room, 0.08, 0.75, 0.08, d.x + q[0] * 0.8, 0, d.z + q[1] * 0.4, 0x3a2412));
+                box(room, 0.6, 0.42, 0.06, d.x, 0.85, d.z - 0.25, 0x111111);
+                const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.32), basic(pick([0x2a6aff, 0x1aff8a, 0xff4a4a]))); scr.position.set(d.x, 1.06, d.z - 0.215); room.group.add(scr);
+                room.lamps.push({ x: d.x, y: 1.1, z: d.z, mesh: null, base: 0.18, col: 0x7ab0ff });
+                room.tables.push({ x: d.x, z: d.z, top: 0.85, w: 1.8, d: 1.0 });
+            }
+            for (let i = 0; i < 2; i++) addDresser(room);
+            room.wantSafe = true;
+            room.sound = 'hum';
+        },
+        laundry(room) {
+            for (let i = 0; i < rint(3, 5); i++) {
+                const r = fit(room, 0.85, 0.85);
+                if (!r) break;
+                const face = r.x < 0 ? 1 : -1;
+                box(room, 0.85, 1.0, 0.85, r.x, 0, r.z, 0xe8e8e8, { collide: true });
+                const dr = new THREE.Mesh(new THREE.CircleGeometry(0.28, 16), basic(0x2a3a4a)); dr.rotation.y = face > 0 ? Math.PI / 2 : -Math.PI / 2; dr.position.set(r.x + face * 0.43, 0.5, r.z); room.group.add(dr);
+                room.washers = (room.washers || []).concat([dr]);
+            }
+            for (let i = 0; i < 3; i++) { const sh = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.6), mat(pick([0xf0f0ea, 0xe8e0d0, 0xd8e0f0]))); sh.material.side = THREE.DoubleSide; sh.position.set(rnd(-room.W / 3, room.W / 3), 2.6, rnd(room.z1 + 4, room.z0 - 4)); sh.rotation.y = rnd(-0.3, 0.3); room.group.add(sh); room.sheets = (room.sheets || []).concat([sh]); }
+            addTallHide(room, 'Hide in the laundry chute closet', 0x7a6a5a, 0x8a7a6a, 1.0);
+            room.sound = 'hum';
+        },
+        boiler(room) {
+            for (let i = 0; i < rint(2, 3); i++) {
+                const r = fit(room, 1.6, 1.6);
+                if (!r) break;
+                cyl(room, 0.75, 0.75, 2.6, r.x, 0, r.z, 0x5a3a2a);
+                cyl(room, 0.12, 0.12, WALL_H - 2.6, r.x, 2.6, r.z, 0x4a4a52);
+                room.col.push({ x0: r.x - 0.75, x1: r.x + 0.75, z0: r.z - 0.75, z1: r.z + 0.75 });
+                const g = new THREE.Mesh(new THREE.CircleGeometry(0.15, 10), basic(0xff5522)); g.position.set(r.x + (r.x < 0 ? 0.76 : -0.76), 1.0, r.z); g.rotation.y = r.x < 0 ? Math.PI / 2 : -Math.PI / 2; room.group.add(g);
+                room.lamps.push({ x: r.x, y: 1.0, z: r.z, mesh: null, base: 0.35, col: 0xff5522 });
+                room.vents = (room.vents || []).concat([{ x: r.x, z: r.z, t: rnd(0, 5) }]);
+            }
+            [-1, 1].forEach((s) => box(room, 0.18, 0.18, room.D - 1, s * (room.W / 2 - 0.4), WALL_H - 0.5, (room.z0 + room.z1) / 2, 0x4a4a52));
+            box(room, room.W - 1, 0.14, 0.14, 0, WALL_H - 0.7, room.z0 - 2, 0x4a4a52);
+            lampCol(room, 0xff8a5a, 0.55);
+            room.sound = 'hiss';
+        },
+        gallery(room) {
+            for (let i = 0; i < rint(4, 6); i++) addPainting(room);
+            room.statues = [];
+            for (let i = 0; i < rint(2, 4); i++) {
+                const r = freeSpot(room, 0.8, 0.8);
+                if (!r) break;
+                box(room, 0.7, 1.1, 0.7, r.x, 0, r.z, 0xe8e2d0, { collide: true });
+                const head = new THREE.Group();
+                const bust = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), mat(0xd8d2c0)); bust.scale.set(1, 1.15, 1); head.add(bust);
+                [-0.08, 0.08].forEach((ex) => { const e = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), basic(0x1a1a1a)); e.position.set(ex, 0.04, 0.22); head.add(e); });
+                const sh = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.32, 0.3, 10), mat(0xd8d2c0)); sh.position.y = -0.3; head.add(sh);
+                head.position.set(r.x, 1.55, r.z); room.group.add(head);
+                room.statues.push(head);
+            }
+            for (let i = 0; i < 2; i++) { const r = freeSpot(room, 2.2, 0.3); if (!r) break; [-1, 1].forEach((s) => cyl(room, 0.05, 0.07, 0.95, r.x + s, 0, r.z, 0xd4af37)); box(room, 2.0, 0.07, 0.07, r.x, 0.8, r.z, 0x8a1a1a); }
+            for (let i = 0; i < 2; i++) addTallHide(room, 'Hide in the crate', 0x8a6a3a, 0x9a7a4a, 1.0);
+            room.sound = 'quiet';
+        },
+        playroom(room) {
+            for (let i = 0; i < 10; i++) { const x = rnd(-room.W / 2 + 1, room.W / 2 - 1), z = rnd(room.z1 + 2, room.z0 - 2); const b = box(room, 0.3, 0.3, 0.3, x, 0, z, pick([0xef4444, 0x3b82f6, 0xeab308, 0x22c55e])); b.rotation.y = rnd(0, 3); }
+            const h = freeSpot(room, 1.4, 0.6);
+            if (h) {
+                const hg = new THREE.Group();
+                const bd = new THREE.Mesh(geo(1.0, 0.4, 0.35), mat(0x8a5a2a)); bd.position.y = 0.75; hg.add(bd);
+                const hd = new THREE.Mesh(geo(0.3, 0.35, 0.3), mat(0x8a5a2a)); hd.position.set(0.55, 1.05, 0); hg.add(hd);
+                const rk = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.04, 6, 16, Math.PI), mat(0x5a3a1c)); rk.rotation.x = Math.PI / 2; rk.rotation.z = Math.PI; rk.position.y = 0.7; hg.add(rk);
+                hg.position.set(h.x, 0, h.z); room.group.add(hg);
+                room.col.push({ x0: h.x - 0.6, x1: h.x + 0.6, z0: h.z - 0.3, z1: h.z + 0.3 });
+                room.horse = hg;
+            }
+            room.sound = 'musicbox';
+        },
+        broom(room) {
+            for (let i = 0; i < 3; i++) { const x = (i % 2 ? 1 : -1) * (room.W / 2 - 0.4), z = rnd(room.z1 + 3, room.z0 - 3); cyl(room, 0.02, 0.02, 1.6, x, 0, z, 0x8a6a3a).rotation.z = 0.2; cyl(room, 0.2, 0.17, 0.3, x + rnd(-0.3, 0.3), 0, z + 0.4, 0x5a6a7a); }
+            lampCol(room, 0xffe0a0, 0.6);
+        },
+        linen(room) {
+            [-1, 1].forEach((s) => { for (let k = 0; k < 4; k++) { box(room, 0.5, 0.05, 2.6, s * (room.W / 2 - 0.3), 0.5 + k * 0.6, (room.z0 + room.z1) / 2, 0x6b4423); for (let j = 0; j < 4; j++) box(room, 0.4, 0.2, 0.5, s * (room.W / 2 - 0.3), 0.55 + k * 0.6, (room.z0 + room.z1) / 2 - 0.9 + j * 0.6, pick([0xf0f0ea, 0xbfd8f0, 0xf0c8c8])); } });
+        }
+    };
+    // themes: counts of standard furniture + optional set piece + which layouts they suit
     const THEMES = [
-        { name: 'Guest Bedroom', beds: [1, 1], ward: [1, 1], dress: [1, 2], tables: [0, 1], plants: [0, 1] },
-        { name: 'Dining Hall (Gravy Wing)', bigTable: 1, ward: [0, 1], dress: [1, 1], plants: [0, 1], bookshelf: [0, 1] },
-        { name: 'Study Hall', bookshelf: [2, 3], ward: [1, 1], dress: [0, 1], tables: [1, 1], couch: [0, 1] },
-        { name: 'Mystery Meat Storage', crates: [3, 5], ward: [1, 1], dress: [1, 1], chest: [0, 1] },
-        { name: 'Detention Lounge', couch: [1, 2], ward: [1, 1], dress: [1, 1], tables: [1, 1], plants: [1, 2] },
-        { name: 'Sloppy Joe Pantry', crates: [1, 2], dress: [2, 2], ward: [1, 1], tables: [1, 1], chest: [0, 1] },
-        { name: 'Lost & Found', beds: [0, 1], ward: [1, 2], dress: [1, 2], crates: [1, 2], chest: [0, 1] },
-        { name: 'Staff Locker Room', lockers: [3, 5], dress: [1, 1], tables: [0, 1], crates: [0, 1] },
-        { name: 'Gym Storage', lockers: [2, 3], crates: [2, 3], dress: [1, 1], chest: [0, 1] }
+        { name: 'Guest Bedroom', beds: [1, 1], ward: [1, 1], dress: [1, 2], tables: [0, 1], plants: [0, 1], lay: 'standard wide long maze' },
+        { name: 'Dining Hall (Gravy Wing)', bigTable: 1, ward: [0, 1], dress: [1, 1], plants: [0, 1], bookshelf: [0, 1], lay: 'standard wide pillars' },
+        { name: 'Study Hall', bookshelf: [2, 3], ward: [1, 1], dress: [0, 1], tables: [1, 1], couch: [0, 1], lay: 'standard long maze' },
+        { name: 'Mystery Meat Storage', crates: [3, 5], ward: [1, 1], dress: [1, 1], chest: [0, 1], lay: 'standard wide maze long' },
+        { name: 'Detention Lounge', couch: [1, 2], ward: [1, 1], dress: [1, 1], tables: [1, 1], plants: [1, 2], lay: 'standard wide' },
+        { name: 'Sloppy Joe Pantry', crates: [1, 2], dress: [2, 2], ward: [1, 1], tables: [1, 1], chest: [0, 1], lay: 'standard long' },
+        { name: 'Lost & Found', beds: [0, 1], ward: [1, 2], dress: [1, 2], crates: [1, 2], chest: [0, 1], lay: 'standard maze' },
+        { name: 'Staff Locker Room', lockers: [3, 5], dress: [1, 1], tables: [0, 1], crates: [0, 1], lay: 'standard long maze' },
+        { name: 'Gym Storage', lockers: [2, 3], crates: [2, 3], dress: [1, 1], chest: [0, 1], lay: 'wide standard' },
+        { name: 'Hotel Kitchen', id: 'kitchen', dress: [0, 1], lay: 'standard long wide' },
+        { name: 'Grand Ballroom', id: 'ballroom', ward: [0, 1], lay: 'wide pillars', min: 6 },
+        { name: 'Moonlit Greenhouse', id: 'greenhouse', ward: [1, 1], lay: 'wide standard pillars', min: 8 },
+        { name: 'Restrooms', id: 'restroom', lay: 'standard long', min: 5 },
+        { name: "Manager's Office", id: 'office', ward: [1, 1], lay: 'standard maze', min: 6 },
+        { name: 'Laundry Room', id: 'laundry', dress: [0, 1], lay: 'standard long maze', min: 4 },
+        { name: 'Boiler Room', id: 'boiler', lockers: [1, 1], lay: 'standard maze wide', min: 12 },
+        { name: 'Art Gallery', id: 'gallery', lay: 'long wide pillars', min: 10 },
+        { name: 'Abandoned Playroom', id: 'playroom', ward: [1, 1], chest: [0, 1], dress: [1, 1], lay: 'standard wide', min: 15 },
+        { name: 'Broom Closet', id: 'broom', lockers: [1, 1], dress: [0, 1], lay: 'closet' },
+        { name: 'Linen Closet', id: 'linen', ward: [1, 1], lay: 'closet' },
+        { name: 'Coat Room', ward: [1, 2], dress: [0, 1], lay: 'closet' }
     ];
     function cnt(r) { return r ? rint(r[0], r[1]) : 0; }
+    function pickTheme(room) {
+        const prevT = S.rooms[room.n - 1] && S.rooms[room.n - 1].title;
+        let ok = THEMES.filter((t) => t.lay.split(' ').indexOf(room.layout) >= 0 && room.n >= (t.min || 0) && t.name !== prevT);
+        if (!ok.length) ok = THEMES.filter((t) => t.lay.indexOf('standard') >= 0);
+        return pick(ok);
+    }
     function buildNormal(room) {
-        const th = pick(THEMES);
-        room.title = th.name;
-        addRug(room, room.W * 0.55, room.D * 0.5, 0, (room.z0 + room.z1) / 2);
-        const nLamp = Math.max(2, Math.round(room.D / 8));
-        for (let i = 0; i < nLamp; i++) addLamp(room, rnd(-1.5, 1.5), room.z0 - (i + 0.7) * room.D / (nLamp + 0.3));
-        for (let i = 0; i < cnt(th.beds); i++) addBed(room);
+        const th = pickTheme(room);
+        room.title = th.name; room.theme = th.id || 'basic';
+        if (room.layout === 'maze') addMazeWalls(room);
+        else if (room.layout === 'pillars') addPillars(room);
+        if (room.layout !== 'closet' && th.id !== 'restroom') addRug(room, room.W * 0.55, room.D * 0.5, (room.entryX + room.doorX) / 2 * 0.5, (room.z0 + room.z1) / 2);
+        const nLamp = Math.max(1, Math.round(room.D / 8));
+        for (let i = 0; i < nLamp; i++) { const z = room.z0 - (i + 0.7) * room.D / (nLamp + 0.3); addLamp(room, laneX(room, z) + rnd(-1.2, 1.2), z); }
+        const mul = room.layout === 'closet' ? 0.5 : (room.layout === 'wide' || room.layout === 'pillars') ? 1.4 : 1;
+        const many = (r) => Math.max(0, Math.round(cnt(r) * mul));
+        if (th.id && THEME_BUILD[th.id]) THEME_BUILD[th.id](room);
+        for (let i = 0; i < many(th.beds); i++) addBed(room);
         for (let i = 0; i < cnt(th.ward); i++) addWardrobe(room);
-        for (let i = 0; i < cnt(th.lockers); i++) addLocker(room);
+        for (let i = 0; i < many(th.lockers); i++) addLocker(room);
         if (th.bigTable) addTable(room, true);
-        for (let i = 0; i < cnt(th.dress); i++) addDresser(room);
-        for (let i = 0; i < cnt(th.tables); i++) addTable(room, false);
-        for (let i = 0; i < cnt(th.bookshelf); i++) addBookshelf(room);
-        for (let i = 0; i < cnt(th.couch); i++) addCouch(room);
-        for (let i = 0; i < cnt(th.crates); i++) addCrates(room);
-        for (let i = 0; i < cnt(th.plants); i++) addPlant(room);
+        for (let i = 0; i < Math.max(th.dress ? 1 : 0, many(th.dress)); i++) addDresser(room);
+        for (let i = 0; i < many(th.tables); i++) addTable(room, false);
+        for (let i = 0; i < many(th.bookshelf); i++) addBookshelf(room);
+        for (let i = 0; i < many(th.couch); i++) addCouch(room);
+        for (let i = 0; i < many(th.crates); i++) addCrates(room);
+        for (let i = 0; i < many(th.plants); i++) addPlant(room);
         if (room.n >= 6) for (let i = 0; i < cnt(th.chest); i++) addChest(room);
-        if (room.hides.length === 0) { if (!addWardrobe(room)) addBed(room); }
-        for (let i = 0; i < rint(1, 2); i++) addPainting(room);
+        // every room gets at least one hiding spot (and big rooms two)
+        const wantHides = room.W * room.D > 260 ? 2 : 1;
+        for (let i = 0; room.hides.length < wantHides && i < 3; i++) { if (!addWardrobe(room) && !addLocker(room)) addBed(room); }
+        if (!room.drawers.length && room.layout !== 'closet') addDresser(room);
+        if (!th.id || th.id === 'basic') for (let i = 0; i < rint(1, 2); i++) addPainting(room);
         decorateRoom(room);
-        room.tables.forEach((t) => { if (Math.random() < 0.35) addGold(room, t.x + rnd(-0.5, 0.5), t.top, t.z + rnd(-0.3, 0.3), rint(5, 20)); });
-        if (Math.random() < 0.4) addGold(room, rnd(-4, 4), 0.02, rnd(room.z1 + 3, room.z0 - 3), rint(5, 15));
-        if (Math.random() < 0.12) {
-            const sign = labelPlane(pick(['WET FLOOR\n(always)', 'NO RUNNING\nexcept from Rush', 'LUNCH RULES:\n1. Survive', 'CAUTION:\nhungry Alex', 'DO NOT FEED\nTHE FIGURE']), 1.5, 0.9, 'bold 42px Georgia', '#1a0f07', '#e8d27a', 384, 224);
-            const side = Math.random() < 0.5 ? -1 : 1;
+        room.tables.forEach((t) => { if (R() < 0.35) addGold(room, t.x + rnd(-0.3, 0.3), t.top, t.z + rnd(-0.3, 0.3), rint(5, 20)); });
+        if (R() < 0.45) { const g = freeSpot(room, 0.5, 0.5); if (g) addGold(room, g.x, 0.02, g.z, rint(5, 15)); }
+        if (R() < 0.12) {
+            const sign = labelPlane(pick(['WET FLOOR\n(always)', 'NO RUNNING\nexcept from Rush', 'LUNCH RULES:\n1. Survive', 'CAUTION:\nhungry Alex', 'DO NOT FEED\nTHE FIGURE', 'NO LOITERING\n— The Janitor', 'CHECKOUT TIME:\nnever']), 1.5, 0.9, 'bold 42px Georgia', '#1a0f07', '#e8d27a', 384, 224);
+            const side = R() < 0.5 ? -1 : 1;
             sign.position.set(side * (room.W / 2 - 0.12), 2.5, rnd(room.z1 + 4, room.z0 - 4));
             sign.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
             room.group.add(sign);
@@ -5616,7 +5914,9 @@
     }
 
     function buildHallway(room) {
-        room.title = 'Long Hallway';
+        const variant = room.n < 8 ? 'plain' : pick(['plain', 'plain', 'portrait', 'collapsed', 'service']);
+        room.title = { plain: 'Long Hallway', portrait: 'Portrait Hall', collapsed: 'Collapsed Corridor', service: 'Service Corridor' }[variant];
+        room.theme = 'hall-' + variant;
         addRug(room, 3, room.D - 2, 0, (room.z0 + room.z1) / 2);
         const nLamp = Math.round(room.D / 7);
         for (let i = 0; i < nLamp; i++) addLamp(room, 0, room.z0 - (i + 0.6) * room.D / (nLamp + 0.2));
@@ -5625,14 +5925,50 @@
             const side = i % 2 ? 1 : -1;
             const z = room.z0 - 5 - i * (room.D - 10) / 3 - rnd(0, 2);
             box(room, 0.5, 0.95, 1.4, side * (room.W / 2 - 0.3), 0, z, 0x6b4423, { collide: true });
+            reserve(room, side * (room.W / 2 - 0.3), z, 0.5, 1.4);
             const dm = box(room, 0.1, 0.5, 0.64, side * (room.W / 2 - 0.3) - side * 0.28, 0.3, z, 0x805230);
             const d = { kind: 'drawer', mesh: dm, baseX: side * (room.W / 2 - 0.3) - side * 0.28, face: -side, open: false, t: 0, hasKey: false,
                 x: side * (room.W / 2 - 0.9), y: 0.6, z: z, label: 'Open drawer', reach: 2.3, cone: 0.85 };
             addInter(room, d); room.drawers.push(d);
             cyl(room, 0.1, 0.13, 0.35, side * (room.W / 2 - 0.3), 0.95, z, pick([0x3a6a9a, 0x9a3a3a]));
         }
-        if (Math.random() < 0.5) { const w = addWardrobe(room); }
-        if (Math.random() < 0.4) addGold(room, rnd(-1, 1), 0.02, rnd(room.z1 + 5, room.z0 - 5), rint(8, 25));
+        // hallways ALWAYS have somewhere to hide now (Rush in a hallway used to be a guaranteed death)
+        const nh = room.D > 33 ? 2 : 1;
+        for (let i = 0; i < 4 && room.hides.length < nh; i++) { if (variant === 'service' ? !addLocker(room) : !addWardrobe(room)) addLocker(room); }
+        if (!room.hides.length) {   // last resort: carve a wardrobe alcove right by the entrance
+            const x = (room.W / 2 - 0.6) * (room.entryX > 0 ? -1 : 1), z = room.z0 - 2.4;
+            box(room, 0.95, 3.0, 1.4, x, 0, z, 0x5b3a1e, { collide: true });
+            const face = x < 0 ? 1 : -1;
+            const spot = { kind: 'wardrobe', x: x, z: z, face: face, camY: 1.55, exitX: x + face * 1.1, exitZ: z, yaw: face > 0 ? -Math.PI / 2 : Math.PI / 2, room: room };
+            room.hides.push(spot);
+            addInter(room, { kind: 'hide', spot: spot, x: x + face * 0.7, y: 1.4, z: z, label: 'Hide in wardrobe', cone: 0.82, reach: 2.6 });
+        }
+        if (variant === 'portrait') {
+            room.portraits = [];
+            for (let i = 0; i < 6; i++) addPainting(room);
+            for (let i = 0; i < 5; i++) {   // portraits whose eyes follow you
+                const side = i % 2 ? 1 : -1, z = room.z0 - 4 - i * (room.D - 8) / 5;
+                const fr = box(room, 0.06, 1.1, 0.85, side * (room.W / 2 - 0.05), 1.7, z, 0xb8901f, { emissive: 0x2a1e00 });
+                const face = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.9), mat(0x2a1a12)); face.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2; face.position.set(side * (room.W / 2 - 0.09), 2.25, z); room.group.add(face);
+                const eyes = [];
+                [-0.12, 0.12].forEach((dz) => { const e = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 6), basic(0xf5f0d0)); e.position.set(side * (room.W / 2 - 0.11), 2.38, z + dz); room.group.add(e); const p2 = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 6), basic(0x000000)); room.group.add(p2); eyes.push({ e: e, p: p2 }); });
+                room.portraits.push({ eyes: eyes, side: side });
+            }
+        } else if (variant === 'collapsed') {
+            for (let i = 0; i < 4; i++) {
+                const z = room.z0 - 6 - i * (room.D - 12) / 4, x = (i % 2 ? 1 : -1) * rnd(0.8, room.W / 2 - 1.2);
+                if (Math.abs(x - laneX(room, z)) < 1.6) continue;
+                const m = box(room, rnd(0.8, 1.3), rnd(0.4, 0.9), rnd(0.8, 1.3), x, 0, z, pick([0x5c5048, 0x4a2c15, 0x6a5a48]), { collide: true });
+                m.rotation.y = rnd(-0.5, 0.5);
+                reserve(room, x, z, 1.4, 1.4);
+            }
+            for (let i = 0; i < 3; i++) { const b = box(room, 0.2, 0.2, rnd(2, 3.5), rnd(-1, 1), WALL_H - 0.6, rnd(room.z1 + 4, room.z0 - 4), 0x3a2412); b.rotation.x = rnd(-0.25, 0.25); }
+            room.lamps.forEach((l, i) => { if (i % 2) l.base = 0.2; });
+        } else if (variant === 'service') {
+            [-1, 1].forEach((s) => box(room, 0.14, 0.14, room.D - 1, s * (room.W / 2 - 0.3), WALL_H - 0.4, (room.z0 + room.z1) / 2, 0x55555e));
+            lampCol(room, 0xe8f0ff, 0.7);
+        }
+        if (R() < 0.4) { const g = freeSpot(room, 0.5, 0.5); if (g) addGold(room, g.x, 0.02, g.z, rint(8, 25)); }
     }
 
     function buildLobby(room) {
@@ -5683,6 +6019,7 @@
         jf.position.set(0, 0, cz - 1.2);
         room.group.add(jf);
         room.jeff = jf;
+        addWardrobe(room);   // even a safe room gets a hiding spot (Rush can roll in from the room before)
         const tag = labelPlane("JEFF'S SHOP\nPrices are fair. Mostly.", 3.4, 1.0, 'bold 36px Georgia', '#fde68a', '#1a0f07', 600, 180);
         tag.position.set(0, 3.2, room.z1 + 0.4); tag.rotation.y = 0; room.group.add(tag);
         // wares
@@ -5692,9 +6029,9 @@
             { id: 'bandage', price: 60 }, { id: 'smoothie', price: 80 }, { id: 'revive', price: 250 }, { id: 'flare', price: 90 }, { id: 'stopwatch', price: 150 }
         ];
         const wares = [pool[4]];
-        const rest = pool.filter((p) => p.id !== 'skeleton').sort(() => Math.random() - 0.5).slice(0, 4);
+        const rest = shuffle(pool.filter((p) => p.id !== 'skeleton')).slice(0, 4);
         rest.forEach((r) => wares.push(r));
-        wares.sort(() => Math.random() - 0.5);
+        shuffle(wares);
         wares.forEach((w, i) => {
             const x = -4.0 + i * 2.0;
             const def = ITEM_DEFS[w.id];
@@ -5781,7 +6118,7 @@
             }
         } else if (pattern === 'split') {
             // a wall splits the room in two lanes; one lane is a dead end full of slime
-            const good = Math.random() < 0.5 ? -1 : 1;
+            const good = R() < 0.5 ? -1 : 1;
             const zA = room.z0 - 3, zB = room.z1 + 3.2, laneX = (half + 0.3) / 2;
             box(room, 0.6, WALL_H, zA - zB, 0, 0, (zA + zB) / 2, room.pal.wall, { collide: true });
             const wallW = half - 0.3;
@@ -6000,8 +6337,8 @@
         addInter(room, { kind: 'note', mesh: paper, x: deskX, y: 1.1, z: deskZ + 0.1, label: "Read the librarian's note", reach: 2.7, cone: 0.85, onUse: (t) => readNote(t) });
         // the code: every position has a symbol; the note gives the symbol order
         const code = [rint(0, 9), rint(0, 9), rint(0, 9), rint(0, 9), rint(0, 9)];
-        const syms = LIB_SYMS.slice().sort(() => Math.random() - 0.5).slice(0, 5);
-        const order = [0, 1, 2, 3, 4].sort(() => Math.random() - 0.5);
+        const syms = shuffle(LIB_SYMS.slice()).slice(0, 5);
+        const order = shuffle([0, 1, 2, 3, 4]);
         const aisles = [-5.5, 0, 5.5];
         const spots = [];
         for (let tries = 0; spots.length < 14 && tries < 300; tries++) {
@@ -6103,7 +6440,7 @@
         const spots = [];
         for (let tries = 0; spots.length < BOSS_NEED && tries < 400; tries++) {
             const ax = pick([-10.9, -6.6, 6.6, 10.9, 0]);
-            const x = ax + (ax === 0 ? pick([-1.6, 1.6]) : (Math.random() < 0.5 ? -1.0 : 1.0));
+            const x = ax + (ax === 0 ? pick([-1.6, 1.6]) : (R() < 0.5 ? -1.0 : 1.0));
             const z = pick(segs) + rnd(-2.8, 2.8);
             if (z > room.z0 - 12) continue;
             if (spots.some((p) => Math.hypot(p.x - x, p.z - z) < 9)) continue;
@@ -6190,23 +6527,249 @@
         if (S.quiet > 0) { S.quiet--; return; }
         if (busy()) return;
         const opts = [];
-        if (n >= 4) opts.push(['rush', 0.22 * ev]);
-        if (n >= 12) opts.push(['ambush', 0.14 * ev]);
-        if (n >= 6) opts.push(['screech', (room.dark ? 0.35 : 0.12) * ev]);
-        if (n >= 8) opts.push(['eyes', 0.12 * ev]);
-        if (room.kind === 'hallway' && n >= 9) opts.push(['halt', 0.55 * ev]);
-        let r = Math.random(), acc = 0;
+        if (n >= 4) opts.push(['rush', 0.19 * ev]);
+        if (n >= 12) opts.push(['ambush', 0.11 * ev]);
+        if (n >= 6) opts.push(['screech', (room.dark ? 0.3 : 0.09) * ev]);
+        if (n >= 8) opts.push(['eyes', 0.08 * ev]);
+        if (room.kind === 'hallway' && n >= 9) opts.push(['halt', 0.45 * ev]);
+        if (n >= 14 && room.kind === 'normal') opts.push(['collapse', 0.08 * ev]);
+        if (n >= 10 && !room.dark) opts.push(['blackout', 0.07 * ev]);
+        if (n >= 5) opts.push(['polter', 0.11]);
+        // pity timer: after 3 quiet rooms in a row, something WILL happen
+        const force = (S.calm || 0) >= 3 && n >= 6;
+        let total = 0; opts.forEach((o) => { total += o[1]; });
+        let r = force ? R() * total : R(), acc = 0;
         for (const o of opts) {
             acc += o[1];
             if (r < acc) {
+                S.calm = 0;
                 if (o[0] === 'rush' || o[0] === 'ambush') startRush(o[0], room);
                 else if (o[0] === 'screech') startScreech(room);
                 else if (o[0] === 'eyes') startEyes(room);
                 else if (o[0] === 'halt') startHalt(room);
+                else startRoomEvent(o[0], room);
                 return;
             }
         }
-        if (Math.random() < 0.1) sub(pick(QUIPS), 3.4);
+        S.calm = (S.calm || 0) + 1;
+        if (R() < 0.45) ambientHappening(room);
+        else if (R() < 0.15) sub(pick(QUIPS), 3.4);
+    }
+
+    // ---------- NEW ROOM EVENTS (synced in multiplayer) ----------
+    function startRoomEvent(k, room, remote) {
+        if (!remote) mpEmit('rev', { k: k, n: room.n });
+        if (S.dead || Math.abs(S.cur - room.n) > 1) return;
+        if (k === 'collapse') {
+            const ce = { type: 'collapse', room: room, t: 7.5, spawn: 0.8, rocks: [] };
+            ce.onDie = () => ce.rocks.forEach((r) => { S.root.remove(r.ring); S.root.remove(r.rock); });
+            S.ents.push(ce);
+            sound.drStomp(0.6); S.shake = Math.max(S.shake, 0.6);
+            sub(pick(['The ceiling is CAVING IN! Watch the floor for red rings!', 'CRACK! Plaster rains down — dodge the red rings!']), 4);
+        } else if (k === 'blackout') {
+            const wasDark = room.dark;
+            darkenRoom(room, true);
+            const be = { type: 'blackout', room: room, t: rnd(10, 14), wasDark: wasDark, scr: 3 + R() * 3, whisper: 1 };
+            be.onDie = () => { if (!be.wasDark && !(room.door && room.door.powerLock)) darkenRoom(room, false); };
+            S.ents.push(be);
+            try { sound.tone('sawtooth', 120, 40, 0, 0.6, 0.12); noiseBurst(sound, 0.5, 0.3, 3000, 600, 1); } catch (e) { /* ignore */ }
+            sub(pick(['*BZZT* — every light in the room just died. Something is breathing.', 'BLACKOUT. Use your light if you have one… and stay close to the walls.']), 4);
+        } else if (k === 'polter') {
+            S.ents.push({ type: 'polter', room: room, t: 7, next: 0.3 });
+            sub(pick(['Something invisible is throwing a tantrum…', 'The furniture is… moving? By itself?', 'Drawers rattle. Books fly. Nobody is there.']), 3.5);
+        }
+    }
+    function updCollapse(e, dt) {
+        const P = S.P, room = e.room;
+        e.t -= dt;
+        S.shake = Math.max(S.shake, 0.08);
+        if (e.t > 0 && S.cur === room.n) {
+            e.spawn -= dt;
+            if (e.spawn <= 0) {
+                e.spawn = rnd(0.35, 0.6);
+                const onYou = R() < 0.35;
+                const x = clamp(P.x + (onYou ? 0 : rnd(-3, 3)), -room.W / 2 + 0.6, room.W / 2 - 0.6);
+                const z = clamp(P.z + (onYou ? 0 : rnd(-3.5, 2.5)), room.z1 + 0.6, room.z0 - 0.6);
+                const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.95, 20), basic(0xff2222, { transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }));
+                ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.03, z); S.root.add(ring);
+                const rock = new THREE.Mesh(geo(rnd(0.5, 0.9), rnd(0.3, 0.6), rnd(0.5, 0.9)), mat(pick([0x8a7a6a, 0x5c5048, 0x6a5a48])));
+                rock.position.set(x, WALL_H - 0.2, z); rock.visible = false; S.root.add(rock);
+                e.rocks.push({ ring: ring, rock: rock, x: x, z: z, t: 0.85, vy: 0 });
+                try { noiseBurst(sound, 0.3, 0.06, 900, 300, 1); } catch (er) { /* ignore */ }
+            }
+        }
+        for (let i = e.rocks.length - 1; i >= 0; i--) {
+            const r = e.rocks[i];
+            if (r.t > 0) { r.t -= dt; r.ring.material.opacity = 0.35 + 0.35 * Math.sin(S.time * 28); if (r.t <= 0) r.rock.visible = true; continue; }
+            if (!r.landed) {
+                r.vy += 30 * dt; r.rock.position.y -= r.vy * dt; r.rock.rotation.x += dt * 6;
+                if (r.rock.position.y <= 0.25) {
+                    r.landed = true; r.rock.position.y = 0.25; r.life = 2;
+                    S.root.remove(r.ring);
+                    sound.drStomp(0.35); S.shake = Math.max(S.shake, 0.35);
+                    if (!P.hidden && !S.god && S.cur === room.n && Math.hypot(P.x - r.x, P.z - r.z) < 1.0) { hurt(25, 'collapse'); if (!S.dead) sub('OOF! Plaster to the head.', 2); S.stats.closeCalls++; }
+                }
+            } else { r.life -= dt; if (r.life <= 0) { S.root.remove(r.rock); e.rocks.splice(i, 1); } }
+        }
+        if (e.t <= 0 && !e.rocks.length) {
+            e.dead = true; e.rocks = [];
+            if (!S.dead && S.cur === room.n) { achieve('collapse', 'Hard Hat Not Included'); sub('The rumbling stops. The ceiling holds. For now.', 3); }
+            S.quiet = Math.max(S.quiet || 0, 1);
+        }
+    }
+    function updBlackout(e, dt) {
+        e.t -= dt;
+        const room = e.room;
+        if (S.cur === room.n && !S.dead) {
+            e.whisper -= dt;
+            if (e.whisper <= 0) { e.whisper = rnd(2, 4); sound.drWhisper(); }
+            e.scr -= dt;
+            if (e.scr <= 0 && !S.ents.some((x) => x.type === 'screech')) { e.scr = 99; if (R() < 0.6) startScreech(room); }
+        }
+        if (e.t <= 0) {
+            e.dead = true;
+            try { sound.tone('sine', 300, 900, 0, 0.3, 0.06); } catch (er) { /* ignore */ }
+            if (S.cur === room.n && !S.dead) { sub('The lights flicker back on. Everything looks… slightly moved.', 3); achieve('blackout', 'Afraid Of The Dark? Nah.'); }
+        }
+    }
+    function updPolter(e, dt) {
+        const room = e.room;
+        e.t -= dt; e.next -= dt;
+        if (e.t <= 0) { e.dead = true; if (S.cur === room.n) achieve('polter', 'Who You Gonna Call?'); return; }
+        if (e.next > 0 || S.cur !== room.n) return;
+        e.next = rnd(0.5, 1.1);
+        const a = R();
+        try {
+            if (a < 0.3 && room.drawers.length) {
+                const d = pick(room.drawers);
+                const bx = d.mesh.position.x;
+                let t = 0;
+                S.anims.push((dt2) => { t += dt2; d.mesh.position.x = bx + d.face * Math.abs(Math.sin(t * 18)) * 0.25 * Math.max(0, 1 - t / 0.6); if (t > 0.6) { d.mesh.position.x = bx; return true; } return false; });
+                sound.drDrawer(); sound.drSlam();
+            } else if (a < 0.55) {
+                const c = room.col.filter((q) => q.m && q.m.visible !== false);
+                if (c.length) {
+                    const m = pick(c).m, r0 = m.rotation.z;
+                    let t = 0;
+                    S.anims.push((dt2) => { t += dt2; m.rotation.z = r0 + Math.sin(t * 40) * 0.05 * Math.max(0, 1 - t / 0.7); if (t > 0.7) { m.rotation.z = r0; return true; } return false; });
+                    sound.drStomp(0.25);
+                }
+            } else if (a < 0.8) {
+                const bk = new THREE.Mesh(geo(0.3, 0.08, 0.4), mat(pick([0x7a1f1f, 0x1f4a7a, 0x2a6a3a])));
+                const p = { x: rnd(-room.W / 2 + 1, room.W / 2 - 1), y: 2.2, z: rnd(room.z1 + 2, room.z0 - 2) };
+                const v = { x: rnd(-4, 4), y: rnd(1, 3), z: rnd(-4, 4) };
+                bk.position.set(p.x, p.y, p.z); S.root.add(bk);
+                let t = 0;
+                S.anims.push((dt2) => { t += dt2; v.y -= 14 * dt2; p.x += v.x * dt2; p.y += v.y * dt2; p.z += v.z * dt2; bk.rotation.x += dt2 * 9; bk.position.set(p.x, Math.max(0.05, p.y), p.z); if (p.y <= 0.05 && !bk.userData.l) { bk.userData.l = 1; sound.drStomp(0.15); } if (t > 4) { S.root.remove(bk); return true; } return false; });
+                sound.drWhoosh(0.3, 0.15);
+            } else {
+                S.flicker = Math.max(S.flicker, 0.5);
+                sound.tone('square', 150, 120, 0, 0.05, 0.06); sound.tone('square', 150, 120, 0.2, 0.05, 0.06); sound.tone('square', 150, 120, 0.4, 0.05, 0.06);
+            }
+        } catch (er) { console.error(er); }
+    }
+    // small creepy moments that are NOT dangerous (only you see them)
+    function ambientHappening(room) {
+        const a = R();
+        setTimeout(() => {
+            if (!S.running || S.dead || S.cur !== room.n) return;
+            try {
+                if (a < 0.4) {
+                    // a shadow crosses the far end of the room
+                    const g = new THREE.Group();
+                    const m = basic(0x020203, { transparent: true, opacity: 0.85 });
+                    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.4, 1.8, 8), m); body.position.y = 0.9; g.add(body);
+                    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), m); head.position.y = 2.0; g.add(head);
+                    const side = R() < 0.5 ? -1 : 1, z = room.z1 + 1.8;
+                    g.position.set(side * (room.W / 2 - 1), 0, z); S.root.add(g);
+                    let t = 0;
+                    S.anims.push((dt) => { t += dt; g.position.x -= side * dt * 5; m.opacity = Math.max(0, 0.85 - Math.max(0, t - 1.2) * 1.5); if (t > 1.9 || S.cur !== room.n) { S.root.remove(g); return true; } return false; });
+                    sound.drWhisper();
+                } else if (a < 0.6) {
+                    const l = room.lamps.filter((q) => !q.broken && q.halo);
+                    if (l.length) { breakLamp(pick(l)); sub(pick(['A bulb bursts. Just a bulb. Probably.', 'Pop! One light down.']), 2.4); }
+                } else if (a < 0.8) {
+                    for (let i = 0; i < 3; i++) sound.tone('square', 130, 100, i * 0.28, 0.06, 0.09);
+                    sub(pick(['*knock knock knock* …from inside the wall.', 'Someone knocks. Three times. From the room you just left.']), 3);
+                } else {
+                    sound.tone('sawtooth', 600, 1400, 0, 0.6, 0.02);
+                    sub(pick(['A distant scream echoes through the vents.', 'Far away, somebody just found out what Rush is.']), 3);
+                }
+            } catch (e) { /* ignore */ }
+        }, 1200 + R() * 4000);
+    }
+    DEATHS.collapse = { q: ['You died to who you call… the ceiling?', 'Crushed by home decor. Classic hotel.'], h: 'Hint: when the ceiling caves in, keep moving and step out of the red rings — or hide in a wardrobe.' };
+    DEATHS.mimic = { q: ['You died to who you call… Mimic?', 'Not all that glitters is gold. Some of it bites.'], h: 'Hint: gold that twitches is not gold.' };
+
+    // ---------- PUZZLES: code safes + power-out rooms ----------
+    function addSafe(room) {
+        const r = fit(room, 0.55, 0.8);
+        if (!r) return;
+        const face = r.x < 0 ? 1 : -1;
+        box(room, 0.55, 0.9, 0.8, r.x, 0, r.z, 0x3a3a42, { collide: true });
+        const door = box(room, 0.06, 0.7, 0.62, r.x + face * 0.29, 0.1, r.z, 0x55555f);
+        const dial = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.04, 14), mat(0xc0c0c8, 0x202020)); dial.rotation.z = Math.PI / 2; dial.position.set(r.x + face * 0.33, 0.5, r.z); room.group.add(dial);
+        const code = [rint(0, 9), rint(0, 9), rint(0, 9)];
+        room.vault = { code: code, known: false };
+        // the code is written on a sticky note somewhere else in the room
+        let nx, nz, ny = 0.04;
+        const tb = room.tables.length ? pick(room.tables) : null;
+        if (tb) { nx = tb.x + rnd(-0.3, 0.3); nz = tb.z + rnd(-0.2, 0.2); ny = tb.top + 0.01; }
+        else { const f = fit(room, 0.4, 0.4, { wall: false }) || { x: rnd(-2, 2), z: (room.z0 + room.z1) / 2 }; nx = f.x; nz = f.z; }
+        const note = new THREE.Mesh(geo(0.22, 0.01, 0.22), basic(0xfde047)); note.position.set(nx, ny, nz); note.rotation.y = rnd(0, 3); room.group.add(note);
+        const nt = addInter(room, { kind: 'snote', mesh: note, x: nx, y: ny + 0.1, z: nz, label: 'Read sticky note', reach: 2.4, cone: 0.85 });
+        nt.onUse = () => { room.vault.known = true; sound.drDrawer(); sub('📝 Sticky note: "SAFE CODE: ' + code.join(' - ') + '  (don\'t tell the manager)"', 5); };
+        const st = addInter(room, { kind: 'safe', mesh: door, x: r.x + face * 0.6, y: 0.6, z: r.z, label: 'Wall safe (3-digit code)', reach: 2.4, cone: 0.85 });
+        st.onUse = (t) => {
+            if (!room.vault.known) { sound.drLocked(); sub('Locked: it needs a 3-digit code. Maybe someone wrote it down somewhere in this room…', 3.5); return; }
+            t.dead = true; door.visible = false;
+            sound.drUnlock(); sound.drCoin();
+            const g = rint(45, 110); S.gold += g; updGold();
+            const rr = R();
+            let extra = '';
+            if (rr < 0.12 && invAdd('crucifix', 1)) extra = ' + a CRUCIFIX ✝️';
+            else if (rr < 0.24 && invAdd('revive', 1)) extra = ' + a GUIDING LIGHT ✨';
+            else if (rr < 0.45 && invAdd('lockpick', 2)) extra = ' + 2 Lockpicks';
+            else if (rr < 0.65 && invAdd('battery', 1)) extra = ' + Battery';
+            else if (invAdd('bandage', 1)) extra = ' + Bandage';
+            sub('*click* You enter ' + code.join('-') + '. The safe swings open: 🪙 ' + g + extra + '!', 4);
+            achieve('safe', 'Safecracker');
+        };
+    }
+    function setupPowerRoom(room) {
+        room.powerOut = true;
+        room.door.powerLock = true;
+        room.levers = 0;
+        darkenRoom(room, true);
+        room.title = room.title + ' (No Power)';
+        for (let i = 0; i < 3; i++) {
+            const r = fit(room, 0.3, 0.6);
+            if (!r) continue;
+            const face = r.x < 0 ? 1 : -1;
+            box(room, 0.2, 0.7, 0.5, r.x, 1.0, r.z, 0x4a4a52, { collide: true });
+            const hd = new THREE.Group();
+            const stick = new THREE.Mesh(geo(0.05, 0.35, 0.05), mat(0x9a9aa2)); stick.position.y = 0.17; hd.add(stick);
+            const knob = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), mat(0xdc2626, 0x400000)); knob.position.y = 0.36; hd.add(knob);
+            hd.position.set(r.x + face * 0.14, 1.3, r.z); hd.rotation.z = face * 0.7; room.group.add(hd);
+            const lt = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), basic(0xff2222)); lt.position.set(r.x + face * 0.11, 1.62, r.z); room.group.add(lt);
+            const it = addInter(room, { kind: 'lever', mesh: null, handle: hd, light: lt, face: face, x: r.x + face * 0.5, y: 1.3, z: r.z, label: 'Pull the lever', reach: 2.4, cone: 0.85 });
+            it.onUse = (t) => pullLever(t, false);
+        }
+        if (room.inter.filter((q) => q.kind === 'lever').length < 3) { room.door.powerLock = false; room.powerOut = false; darkenRoom(room, false); room.title = room.title.replace(' (No Power)', ''); }
+    }
+    function pullLever(t, remote) {
+        const room = t.room;
+        t.dead = true;
+        t.handle.rotation.z = -t.face * 0.7;
+        t.light.material = basic(0x22ff66);
+        room.levers = (room.levers || 0) + 1;
+        if (Math.abs(S.cur - room.n) <= 1) { sound.drSlam(); sound.tone('square', 220, 330, 0, 0.12, 0.06); }
+        if (room.levers >= 3 && room.door.powerLock) {
+            room.door.powerLock = false;
+            darkenRoom(room, false);
+            room.title = room.title.replace(' (No Power)', '');
+            if (S.cur === room.n) { updRoomHUD(room); sound.drUnlock(); sound.drAchv(); sub('⚡ POWER RESTORED! The lights hum back on and the door unlocks.', 3.5); achieve('levers', 'Electrician'); }
+        } else if (!remote && S.cur === room.n) sub('*CLUNK* Lever ' + room.levers + ' / 3. ' + (room.levers < 3 ? 'Find the others!' : ''), 2.4);
     }
 
     // ---------- RUSH / AMBUSH ----------
@@ -6253,7 +6816,7 @@
         for (let n = S.cur - 2; n <= S.cur + 2; n++) {
             const r = S.rooms[n];
             if (!r) continue;
-            r.lamps.forEach((l) => { if (!l.broken && (l.z - oz) * (l.z - e.z) <= 0 && Math.random() < (amb ? 0.25 : 0.4)) breakLamp(l); });
+            r.lamps.forEach((l) => { if (!l.broken && (l.z - oz) * (l.z - e.z) <= 0 && R() < (amb ? 0.25 : 0.4)) breakLamp(l); });
         }
         if (fxLight) { fxLight.position.set(0, 2, e.z); fxLight.color.setHex(amb ? 0x55ff88 : 0xff5040); fxLight.intensity = clamp(1 - Math.abs(e.z - camera.position.z) / 45, 0, 1) * 2.2; }
         e.mesh.position.set(0, amb ? 1.9 : 1.75, e.z);
@@ -6265,7 +6828,8 @@
             e.snd = 0.11;
             if (amb) sound.drAmbush(0.25); else sound.drWhoosh(0.28, clamp(1 - Math.abs(dz) / 70, 0.04, 0.8));
         }
-        if (e.hitPass !== e.pass && Math.abs(dz) < 2.9) {
+        // swept check: also counts if Rush moved past you within one (laggy) frame
+        if (e.hitPass !== e.pass && (Math.abs(dz) < 2.9 || (oz - camera.position.z) * (e.z - camera.position.z) < 0)) {
             e.hitPass = e.pass;
             if (P.hidden) { sound.drWhoosh(0.5, 0.6); S.rushSafe = (S.rushSafe || 0) + 1; }
             else hurt(100, e.type);
@@ -6297,7 +6861,7 @@
         if (e.phase === 'wait') {
             e.t -= dt;
             if (e.t <= 0) {
-                const a = P.yaw + (Math.random() < 0.5 ? -1 : 1) * rnd(1.7, 2.2);
+                const a = P.yaw + (R() < 0.5 ? -1 : 1) * rnd(1.7, 2.2);
                 const room = S.rooms[S.cur];
                 let x = camera.position.x - Math.sin(a) * 1.35;
                 if (room) x = clamp(x, -room.W / 2 + 0.5, room.W / 2 - 0.5);
@@ -6488,7 +7052,7 @@
         e.mesh.userData.mop.rotation.x = Math.sin(e.t * 4) * 0.35;
         S.flicker = Math.max(S.flicker, 0.05);
         e.snd -= dt;
-        if (e.snd <= 0) { e.snd = 0.6; sound.drStep(0.12); if (Math.random() < 0.3) sound.tone('triangle', 1200, 900, 0, 0.12, 0.03); }
+        if (e.snd <= 0) { e.snd = 0.6; sound.drStep(0.12); if (R() < 0.3) sound.tone('triangle', 1200, 900, 0, 0.12, 0.03); }
         if (d < 1.3) {
             if (P.hidden) { exitHide(false); sub('He yanked you out of your hiding spot. "NO. LOITERING."', 2.6); }
             hurt(45, 'janitor');
@@ -6611,7 +7175,7 @@
                     S.anims.push((dt2) => {
                         t += dt2;
                         d.pivot.rotation.y = Math.sin(t * 40) * 0.03 * Math.max(0, 1 - t / 1.6);
-                        if (t > 0.3 && t < 1.4 && Math.random() < dt2 * 6) sound.drStomp(0.25);
+                        if (t > 0.3 && t < 1.4 && R() < dt2 * 6) sound.drStomp(0.25);
                         if (t > 1.7) { d.pivot.rotation.y = 0; return true; }
                         return false;
                     });
@@ -7358,7 +7922,7 @@
         if (c.ctx && c.ctx.chase) animRig(c.ctx.chase.alex, c.i >= 2 ? 'roar' : 'idle', dt, 0);
         if (c.ctx && c.ctx.L && c.ctx.L.mrc) animRig(c.ctx.L.mrc.mesh, c.id === 'mrscRage' ? 'scream' : (c.i < 2 ? 'dormant' : 'idle'), dt, 0);
         const shk = Math.max(sh.shake || 0, S.shake * 0.5);
-        if (shk > 0) { camera.position.x += (Math.random() - 0.5) * shk; camera.position.y += (Math.random() - 0.5) * shk; }
+        if (shk > 0) { camera.position.x += (R() - 0.5) * shk; camera.position.y += (R() - 0.5) * shk; }
         S.shake = Math.max(0, S.shake - dt * 1.6);
         return true;
     }
@@ -7392,7 +7956,7 @@
                       upd(k) { r.pool.scale.setScalar(0.01 + k * 0.6); } },
                     { d: 2.4, from: { x: 2.4, y: 0.55, z: pz - 4.6 }, to: { x: 1.6, y: 0.7, z: pz - 3.6 }, look: { x: 0, y: 1.2, z: pz }, look2: { x: 0, y: ALEX_EYE_Y, z: pz },
                       enter() { sound.drStomp(0.6); A.visible = true; A.position.set(0, -3.4, pz); sub('The slime pool bubbles… something is climbing out.', 2.4); },
-                      upd(k) { r.pool.scale.setScalar(0.6 + k * 0.6); A.position.y = -3.4 + 3.4 * easeIO(k); S.shake = Math.max(S.shake, 0.08); if (Math.random() < 0.05) sound.drStomp(0.2); } },
+                      upd(k) { r.pool.scale.setScalar(0.6 + k * 0.6); A.position.y = -3.4 + 3.4 * easeIO(k); S.shake = Math.max(S.shake, 0.08); if (R() < 0.05) sound.drStomp(0.2); } },
                     { d: 2.0, from: { x: 0.15, y: ALEX_EYE_Y + 0.05, z: pz - 2.6 }, to: { x: 0, y: ALEX_EYE_Y, z: pz - 1.5 }, look: { x: 0, y: ALEX_EYE_Y, z: pz },
                       enter() { A.position.y = 0; sound.drRoar(); S.shake = 0.7; cineTitle('ALEX', 'THE HEAD CHEF  •  HE SEES EVERYTHING', 2.0); } },
                     { d: 0.7, from: E, yaw: Math.PI, yaw2: 0, pitch: -0.1, pitch2: 0, linear: true, enter() { sound.drWhoosh(0.5, 0.4); } }
@@ -7462,7 +8026,7 @@
         const n = S.diff === 'CHILL' ? 5 : S.diff === 'DETENTION' ? 9 : 7;
         const beats = [];
         let t = 1.1;
-        for (let i = 0; i < n; i++) { beats.push({ side: Math.random() < 0.5 ? -1 : 1, at: t, el: null, res: 0 }); t += rnd(0.55, 0.95); }
+        for (let i = 0; i < n; i++) { beats.push({ side: R() < 0.5 ? -1 : 1, at: t, el: null, res: 0 }); t += rnd(0.55, 0.95); }
         Object.assign(HB, { on: true, t: 0, beats: beats, lives: S.diff === 'CHILL' ? 2 : 1, done: done, end: t + 0.4, fails: 0 });
         const box = $('dr-heart');
         box.querySelectorAll('.beat').forEach((b) => b.remove());
@@ -7591,14 +8155,14 @@
         if (!noiseBuf) {
             noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
             const d = noiseBuf.getChannelData(0);
-            for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+            for (let i = 0; i < d.length; i++) d[i] = R() * 2 - 1;
         }
         const src = ctx.createBufferSource(); src.buffer = noiseBuf;
         const fl = ctx.createBiquadFilter(); fl.type = type || 'highpass'; fl.frequency.setValueAtTime(freq || 6000, t);
         const g = ctx.createGain();
         g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
         src.connect(fl); fl.connect(g); g.connect(dest);
-        src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
+        src.start(t, R() * 0.5); src.stop(t + dur + 0.02);
     }
     const kick = (d, t, v) => mnote(d, 'sine', 140, t, 0.22, v || 0.5, { slide: 38 });
     const chord = (d, type, root, ivs, t, dur, vol, o) => ivs.forEach((iv, i) => mnote(d, type, mtof(root + iv), t, dur, vol, Object.assign({ det: (i - 1) * 6 }, o || {})));
@@ -7608,22 +8172,22 @@
             const roots = [57, 53, 55, 52], third = [3, 4, 4, 4];
             if (s % 64 === 0) { mnote(d, 'sine', mtof(33), t, sd * 64, 0.05, { a: 2.5 }); mnote(d, 'sine', mtof(40), t, sd * 64, 0.03, { a: 3 }); }
             if (i === 0) chord(d, 'triangle', roots[bar] - 12, [0, third[bar], 7], t, sd * 16, 0.014, { a: 1.6, lp: 650 });
-            if (i % 4 === 0 && Math.random() < 0.32) {
+            if (i % 4 === 0 && R() < 0.32) {
                 const sc = [0, third[bar], 7, 12, 14, 12 + third[bar]];
                 const f = mtof(roots[bar] + 12 + pick(sc));
                 mnote(d, 'triangle', f, t, 2.6, 0.026, { a: 0.004 });
                 mnote(d, 'sine', f * 2, t, 1.4, 0.007, { a: 0.004 });
-                if (Math.random() < 0.15) mnote(d, 'triangle', mtof(roots[bar] + 12 + pick(sc)), t + sd * 2, 2.2, 0.018, { a: 0.004 });
+                if (R() < 0.15) mnote(d, 'triangle', mtof(roots[bar] + 12 + pick(sc)), t + sd * 2, 2.2, 0.018, { a: 0.004 });
             }
             if (s % 128 === 72) mnote(d, 'triangle', mtof(roots[bar] + 13), t, 3, 0.016, { a: 0.004 });
-            if (Math.random() < 0.006) mnoise(d, t, 3, 0.02, 320, 'bandpass');
+            if (R() < 0.006) mnoise(d, t, 3, 0.02, 320, 'bandpass');
         } },
         library: { bpm: 60, wet: 0.55, step(d, s, t, sd) {
             const i = s % 16, it = MUS.intensity || 0;
             if (i % 4 === 0) mnote(d, 'sine', (i % 8 === 0) ? 1500 : 1120, t, 0.035, 0.03);
             if (s % 32 === 0) mnote(d, 'sawtooth', mtof(s % 64 === 0 ? 38 : 39), t, sd * 32, 0.03, { a: 1.4, lp: 340 });
             const box = [74, 77, 81, 79, 77, 74, 73, 74];
-            if (i % 8 === 4 && Math.random() < 0.55) { const f = mtof(box[(s / 8 | 0) % 8]); mnote(d, 'sine', f, t, 2.2, 0.02); mnote(d, 'sine', f * 2, t, 0.8, 0.005); }
+            if (i % 8 === 4 && R() < 0.55) { const f = mtof(box[(s / 8 | 0) % 8]); mnote(d, 'sine', f, t, 2.2, 0.02); mnote(d, 'sine', f * 2, t, 0.8, 0.005); }
             if (it > 0.3 && (i % 8 === 0 || i % 8 === 2)) mnote(d, 'sine', 55, t, 0.18, 0.2 * it);
             if (it > 0.6) mnote(d, 'sawtooth', mtof(i % 2 ? 51 : 50), t, sd * 0.9, 0.011 * it, { lp: 900 });
         } },
@@ -7691,7 +8255,7 @@
         try {
             if (!MUS.verb) {
                 const len = Math.floor(ctx.sampleRate * 2.6), buf = ctx.createBuffer(2, len, ctx.sampleRate);
-                for (let ch = 0; ch < 2; ch++) { const dd = buf.getChannelData(ch); for (let i = 0; i < len; i++) dd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+                for (let ch = 0; ch < 2; ch++) { const dd = buf.getChannelData(ch); for (let i = 0; i < len; i++) dd[i] = (R() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
                 MUS.verb = ctx.createConvolver(); MUS.verb.buffer = buf; MUS.verb.connect(MUS.bus);
             }
             const wet = ctx.createGain(); wet.gain.value = TRACKS[name].wet || 0.2;
@@ -7792,7 +8356,7 @@
     function openBreaker() {
         if (!BRK.target.length && S.library && S.library.brk) { BRK.target = S.library.brk.slice(); BRK.cur = BRK.target.map(() => false); }
         if (!BRK.target.length) {
-            BRK.target = []; for (let i = 0; i < 8; i++) BRK.target.push(Math.random() < 0.5);
+            BRK.target = []; for (let i = 0; i < 8; i++) BRK.target.push(R() < 0.5);
             if (BRK.target.every((v) => !v)) BRK.target[rint(0, 7)] = true;
             BRK.cur = BRK.target.map(() => false);
         }
@@ -7867,9 +8431,9 @@
         const c = document.createElement('canvas'); c.width = w; c.height = h || w;
         const g = c.getContext && c.getContext('2d');
         // textures are cached, so drawing them must not eat numbers from the seeded room generator
-        const sr = Math.random; Math.random = REAL_RANDOM;
+        const sr = RNG; RNG = REAL_RANDOM;
         if (g) { try { draw(g, w, h || w); } catch (e) { /* ignore */ } }
-        Math.random = sr;
+        RNG = sr;
         const t = new THREE.CanvasTexture(c);
         if (THREE.RepeatWrapping !== undefined) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
         if (t.userData) t.userData.shared = true;
@@ -7879,8 +8443,8 @@
     }
     function speckle(g, w, h, n, alpha, light) {
         for (let i = 0; i < n; i++) {
-            g.fillStyle = (light && Math.random() < 0.5) ? 'rgba(255,255,255,' + (alpha * Math.random()) + ')' : 'rgba(0,0,0,' + (alpha * Math.random()) + ')';
-            g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2);
+            g.fillStyle = (light && R() < 0.5) ? 'rgba(255,255,255,' + (alpha * R()) + ')' : 'rgba(0,0,0,' + (alpha * R()) + ')';
+            g.fillRect(R() * w, R() * h, 1 + R() * 2, 1 + R() * 2);
         }
     }
     function texWallpaper(base) {
@@ -7906,13 +8470,13 @@
             const base = kind === 1 ? [178, 120, 72] : kind === 2 ? [128, 78, 44] : [96, 58, 34];
             const rows = 6;
             for (let r = 0; r < rows; r++) {
-                const f = 0.82 + Math.random() * 0.3;
+                const f = 0.82 + R() * 0.3;
                 g.fillStyle = 'rgb(' + base.map((v) => Math.round(v * f)).join(',') + ')';
                 g.fillRect(0, r * h / rows, w, h / rows);
                 g.strokeStyle = 'rgba(40,20,8,0.25)'; g.lineWidth = 1;
                 for (let k = 0; k < 7; k++) {
                     g.beginPath();
-                    const y0 = r * h / rows + Math.random() * h / rows;
+                    const y0 = r * h / rows + R() * h / rows;
                     g.moveTo(0, y0);
                     for (let x = 0; x <= w; x += 16) g.lineTo(x, y0 + Math.sin(x * 0.05 + k) * 2.5);
                     g.stroke();
@@ -7931,7 +8495,7 @@
             g.strokeStyle = 'rgba(90,60,40,0.22)';
             for (let k = 0; k < 22; k++) {
                 g.beginPath();
-                const y0 = Math.random() * h;
+                const y0 = R() * h;
                 g.moveTo(0, y0);
                 for (let x = 0; x <= w; x += 8) g.lineTo(x, y0 + Math.sin(x * 0.07 + k * 1.7) * 3);
                 g.stroke();
@@ -7969,6 +8533,13 @@
             speckle(g, w, h, 2500, 0.2, true);
         });
     }
+    function texCheck(a, b) {
+        a = a === undefined ? 0xe8e2d0 : a; b = b === undefined ? 0x1a1410 : b;
+        return canvasTex('check' + a + '_' + b, 128, 128, (g, w, h) => {
+            for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { g.fillStyle = cssc((i + j) % 2 ? a : b); g.fillRect(i * 32, j * 32, 32, 32); }
+            speckle(g, w, h, 900, 0.12, true);
+        });
+    }
     function texDoor(locked) {
         return canvasTex('door' + (locked ? 1 : 0), 128, 256, (g, w, h) => {
             const base = locked ? [70, 48, 44] : [118, 72, 38];
@@ -7980,7 +8551,7 @@
             };
             panel(14, 16, 44, 92); panel(70, 16, 44, 92); panel(14, 128, 44, 110); panel(70, 128, 44, 110);
             g.strokeStyle = 'rgba(40,20,8,0.25)';
-            for (let k = 0; k < 30; k++) { const x = Math.random() * w; g.beginPath(); g.moveTo(x, 0); g.lineTo(x + Math.sin(k) * 3, h); g.stroke(); }
+            for (let k = 0; k < 30; k++) { const x = R() * w; g.beginPath(); g.moveTo(x, 0); g.lineTo(x + Math.sin(k) * 3, h); g.stroke(); }
             speckle(g, w, h, 600, 0.12, true);
         });
     }
@@ -8019,7 +8590,7 @@
             } else {   // the hotel itself
                 g.fillStyle = '#1a1220'; g.fillRect(0, 0, w, h);
                 g.fillStyle = '#3a2a2a'; g.fillRect(24, 34, 80, 80);
-                for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { g.fillStyle = Math.random() < 0.3 ? '#ffcc55' : '#120c10'; g.fillRect(32 + c * 18, 42 + r * 17, 9, 10); }
+                for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { g.fillStyle = R() < 0.3 ? '#ffcc55' : '#120c10'; g.fillRect(32 + c * 18, 42 + r * 17, 9, 10); }
                 g.fillStyle = '#120c10'; g.beginPath(); g.moveTo(18, 36); g.lineTo(64, 12); g.lineTo(110, 36); g.fill();
             }
             speckle(g, w, h, 500, 0.18, true);
@@ -8059,15 +8630,16 @@
             addM(geo(0.16, 0.18, D), mat(0x2a160a), s * (W / 2 - 0.08), 0.09, zc);
             addM(geo(0.22, 0.2, D), mat(0x3a2412), s * (W / 2 - 0.11), H - 0.1, zc);
         });
-        const sw = (SLAB_W - DOOR_W) / 2, zn = room.z1;
-        const slabMat = tmat(texWallpaper(pal.wall), 'wp' + pal.wall, sw / 2.2, H / 2.2);
+        const dX = room.doorX || 0, zn = room.z1;
+        const swL = SLAB_W / 2 + dX - DOOR_W / 2, swR = SLAB_W / 2 - dX - DOOR_W / 2;
+        const slabMat = tmat(texWallpaper(pal.wall), 'wp' + pal.wall, 11.9 / 2.2, H / 2.2);
         room.slab = [
-            addM(geo(sw, H, 0.5), slabMat, -(DOOR_W / 2 + sw / 2), H / 2, zn),
-            addM(geo(sw, H, 0.5), slabMat, (DOOR_W / 2 + sw / 2), H / 2, zn),
-            addM(geo(DOOR_W, H - DOOR_H, 0.5), slabMat, 0, DOOR_H + (H - DOOR_H) / 2, zn)
+            addM(geo(swL, H, 0.5), slabMat, dX - DOOR_W / 2 - swL / 2, H / 2, zn),
+            addM(geo(swR, H, 0.5), slabMat, dX + DOOR_W / 2 + swR / 2, H / 2, zn),
+            addM(geo(DOOR_W, H - DOOR_H, 0.5), slabMat, dX, DOOR_H + (H - DOOR_H) / 2, zn)
         ];
         [-1, 1].forEach((s) => {
-            const cx = s * (DOOR_W / 2 + sw / 2);
+            const sw = s < 0 ? swL : swR, cx = dX + s * (DOOR_W / 2 + sw / 2);
             room.slab.push(addM(geo(sw, 1.1, 0.06), tmat(texWainscot(), 'wains', sw / 1.1, 1), cx, 0.55, zn + 0.28));
             room.slab.push(addM(geo(sw, 0.08, 0.1), mat(0xb8901f, 0x2a1e00), cx, 1.12, zn + 0.3));
             room.slab.push(addM(geo(sw, 0.2, 0.2), mat(0x3a2412), cx, H - 0.1, zn + 0.32));
@@ -8147,15 +8719,15 @@
     }
 
     function buildDoor(room, locked) {
-        const zn = room.z1, num = room.n + 1;
+        const zn = room.z1, num = room.n + 1, dX = room.doorX || 0;
         const frameM = matFor(0x3a210f, 0.2, DOOR_H, 0.7);
         room.doorParts = [
-            box(room, 0.2, DOOR_H + 0.1, 0.7, -(DOOR_W / 2 + 0.1), 0, zn, 0x3a210f),
-            box(room, 0.2, DOOR_H + 0.1, 0.7, (DOOR_W / 2 + 0.1), 0, zn, 0x3a210f),
-            box(room, DOOR_W + 0.4, 0.22, 0.7, 0, DOOR_H, zn, 0x3a210f)
+            box(room, 0.2, DOOR_H + 0.1, 0.7, dX - (DOOR_W / 2 + 0.1), 0, zn, 0x3a210f),
+            box(room, 0.2, DOOR_H + 0.1, 0.7, dX + (DOOR_W / 2 + 0.1), 0, zn, 0x3a210f),
+            box(room, DOOR_W + 0.4, 0.22, 0.7, dX, DOOR_H, zn, 0x3a210f)
         ];
         const pivot = new THREE.Group();
-        pivot.position.set(-DOOR_W / 2, 0, zn);
+        pivot.position.set(dX - DOOR_W / 2, 0, zn);
         const dm = new THREE.Mesh(geo(DOOR_W - 0.04, DOOR_H - 0.03, 0.12), tmat(texDoor(locked), 'door' + (locked ? 1 : 0), 1, 1));
         dm.position.set(DOOR_W / 2, DOOR_H / 2, 0);
         pivot.add(dm);
@@ -8166,11 +8738,11 @@
         });
         room.group.add(pivot);
         const plaque = labelPlane(pad3(num), 0.9, 0.42, 'bold 80px Georgia', '#2a1a08', '#d4a73a', 256, 120);
-        plaque.position.set(0, DOOR_H + 0.42, zn + 0.37);
+        plaque.position.set(dX, DOOR_H + 0.42, zn + 0.37);
         room.group.add(plaque);
         room.doorParts.push(plaque);
         const pl2 = labelPlane(pad3(num), 0.9, 0.42, 'bold 80px Georgia', '#2a1a08', '#d4a73a', 256, 120);
-        pl2.position.set(0, DOOR_H + 0.42, zn - 0.37); pl2.rotation.y = Math.PI;
+        pl2.position.set(dX, DOOR_H + 0.42, zn - 0.37); pl2.rotation.y = Math.PI;
         room.group.add(pl2); room.doorParts.push(pl2);
         let lockMesh = null;
         if (locked) {
@@ -8182,16 +8754,16 @@
         }
         // light spilling under closed doors
         const spill = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W * 0.9, 0.5), basic(0xffcc80, { transparent: true, opacity: 0.18, depthWrite: false }));
-        spill.rotation.x = -Math.PI / 2; spill.position.set(0, 0.015, zn + 0.45);
+        spill.rotation.x = -Math.PI / 2; spill.position.set(dX, 0.015, zn + 0.45);
         room.group.add(spill);
         room.doorSpill = spill;
         room.door = { n: num, pivot: pivot, open: false, t: 0, locked: !!locked, lockMesh: lockMesh, auto: false, jammed: false, padlock: false, spill: spill };
-        addInter(room, { kind: 'door', x: 0, y: 1.5, z: zn + 0.1, label: 'Open door ' + pad3(num), reach: 3.6, cone: 0.8, door: room.door });
+        addInter(room, { kind: 'door', x: dX, y: 1.5, z: zn + 0.1, label: 'Open door ' + pad3(num), reach: 3.6, cone: 0.8, door: room.door });
     }
 
     let paintN = 0;
     function addPainting(room) {
-        const side = Math.random() < 0.5 ? -1 : 1;
+        const side = R() < 0.5 ? -1 : 1;
         const z = rnd(room.z1 + 3, room.z0 - 3);
         const w = rnd(0.9, 1.5), h = w * rnd(0.8, 1.2);
         const x = side * (room.W / 2 - 0.06);
@@ -8277,7 +8849,7 @@
             p.scale.setScalar(s);
         });
         const f = m.userData.face;
-        f.position.x = (Math.random() - 0.5) * 0.12; f.position.y = (Math.random() - 0.5) * 0.12;
+        f.position.x = (R() - 0.5) * 0.12; f.position.y = (R() - 0.5) * 0.12;
         f.scale.setScalar(1 + Math.sin(t * 20) * 0.04);
     }
     function makeScreech() {
@@ -8365,6 +8937,8 @@
             '<div class="tip">😁 <b>Giggle</b> on dark ceilings, 🚪 <b>Dupe</b> doors with the wrong number, 🦷 <b>Snares</b> on the floor.</div>',
             '<div class="tip">✨ <b>Guiding Light</b> revives once. 🔘 <b>Knobs</b> buy gear before a run.</div>',
             '<div class="tip">🧹 <b>NEW: the Janitor</b> hates loiterers. Too long in one room? Move on! 🗄️ <b>Lockers</b> work as hiding spots.</div>',
+            '<div class="tip">🏚️ <b>NEW rooms:</b> kitchens, ballrooms, greenhouses, mazes, galleries… Watch out for cave-ins, blackouts and gold with teeth.</div>',
+            '<div class="tip">🔐 <b>Puzzles:</b> wall safes need the code from a sticky note in the room. No power? Pull all 3 levers.</div>',
             '<div class="tip">👥 <b>NEW: multiplayer!</b> Play with friends online — same hotel, shared chases, shared Library. <b>T</b> chat · <b>Q</b> ping · <b>G</b> wave.</div>'
         ].join('');
         // guiding-light typewriter on the death screen
@@ -8441,7 +9015,7 @@
         if (S.ambT > 0) return;
         S.ambT = rnd(10, 22);
         if (S.chase || S.ents.length) return;
-        const r = Math.random();
+        const r = R();
         try {
             if (r < 0.35) sound.drCreak();
             else if (r < 0.6) { sound.tone('square', 150, 120, 0, 0.05, 0.05); sound.tone('square', 150, 120, 0.22, 0.05, 0.05); }
@@ -8451,9 +9025,59 @@
         } catch (e) { /* ignore */ }
     }
 
+    // ---- rooms that feel alive: things move, watch you and make noise ----
+    const _v = new THREE.Vector3();
+    function updRoomLife(dt) {
+        const room = S.rooms[S.cur];
+        if (!room) return;
+        const cam = camera.position, d = lookDir(), t = S.time;
+        if (room.portraits) room.portraits.forEach((pt) => pt.eyes.forEach((q) => {
+            _v.set(cam.x - q.e.position.x, cam.y - q.e.position.y, cam.z - q.e.position.z).normalize().multiplyScalar(0.03);
+            q.p.position.set(q.e.position.x + _v.x, q.e.position.y + _v.y, q.e.position.z + _v.z);
+        }));
+        if (room.statues) room.statues.forEach((h) => {
+            // they only turn when you are NOT looking at them
+            const dx = h.position.x - cam.x, dz = h.position.z - cam.z, dl = Math.hypot(dx, dz) || 1;
+            const looking = (dx * d.x + dz * d.z) / dl > 0.75;
+            if (!looking) {
+                const want = Math.atan2(cam.x - h.position.x, cam.z - h.position.z);
+                let df = want - h.rotation.y; while (df > Math.PI) df -= Math.PI * 2; while (df < -Math.PI) df += Math.PI * 2;
+                if (Math.abs(df) > 0.3 && R() < dt * 0.8) { h.rotation.y += df; try { sound.drCreak(); } catch (e) { /* ignore */ } }
+            }
+        });
+        if (room.mimics) room.mimics.forEach((g) => { if (g.visible && Math.sin(t * 1.7 + g.position.x) > 0.96) g.rotation.y = Math.sin(t * 60) * 0.3; else g.rotation.y = 0; });
+        if (room.horse) room.horse.rotation.z = Math.sin(t * 2.2) * 0.12 * (0.5 + 0.5 * Math.sin(t * 0.37));
+        if (room.sheets) room.sheets.forEach((sh, i) => { sh.rotation.x = Math.sin(t * 1.3 + i) * 0.08; });
+        if (room.vents) room.vents.forEach((v) => {
+            v.t -= dt;
+            if (v.t <= 0) {
+                v.t = rnd(3, 7);
+                try { noiseBurst(sound, 0.8, 0.05 * clamp(1 - Math.hypot(v.x - cam.x, v.z - cam.z) / 14, 0, 1), 3000, 1200, 0.6); } catch (e) { /* ignore */ }
+                const pf = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), basic(0xd8d8d8, { transparent: true, opacity: 0.35, depthWrite: false }));
+                pf.position.set(v.x, 2.7, v.z); S.root.add(pf);
+                let a = 0;
+                S.anims.push((dt2) => { a += dt2; pf.position.y += dt2 * 0.8; pf.scale.setScalar(1 + a * 1.6); pf.material.opacity = Math.max(0, 0.35 - a * 0.18); if (a > 2) { S.root.remove(pf); pf.material.dispose(); return true; } return false; });
+            }
+        });
+        // theme ambience
+        S.themeT = (S.themeT || 0) - dt;
+        if (S.themeT <= 0 && !S.chase) {
+            S.themeT = rnd(2.5, 6);
+            try {
+                const sn = room.sound;
+                if (sn === 'drip' || sn === 'water') { sound.tone('sine', 1400 + R() * 600, 600, 0, 0.12, 0.03); }
+                else if (sn === 'kitchen') { noiseBurst(sound, 1.2, 0.025, 5000, 3000, 0.5); }
+                else if (sn === 'hiss') { noiseBurst(sound, 1.6, 0.03, 2500, 900, 0.5); }
+                else if (sn === 'hum') { sound.tone('sine', 60, 60, 0, 1.8, 0.03); }
+                else if (sn === 'musicbox' && R() < 0.6) { [76, 79, 83, 81, 79, 76].forEach((m, i) => sound.tone('triangle', 440 * Math.pow(2, (m - 69) / 12), 440 * Math.pow(2, (m - 69) / 12), i * 0.35, 0.5, 0.025)); }
+                else if (sn === 'music' && room.piano && R() < 0.5) { const m = pick([57, 60, 63, 66]); sound.tone('triangle', 440 * Math.pow(2, (m - 69) / 12), 440 * Math.pow(2, (m - 69) / 12) * 0.99, 0, 1.6, 0.03); if (!room.pianoTold) { room.pianoTold = true; sub('The piano just played a note. Nobody is sitting at it.', 3); } }
+            } catch (e) { /* ignore */ }
+        }
+    }
+
     // ---- extra furniture so rooms feel lived-in ----
     function addWindowDeco(room) {
-        const side = Math.random() < 0.5 ? -1 : 1;
+        const side = R() < 0.5 ? -1 : 1;
         const z = rnd(room.z1 + 3.5, room.z0 - 3.5);
         if (room.placed.some((p) => Math.abs(p.z - z) < 2.2 && Math.sign(p.x) === side && Math.abs(p.x) > room.W / 2 - 2)) return;
         const x = side * (room.W / 2 - 0.04);
@@ -8481,7 +9105,7 @@
     function addChairs(room) {
         room.tables.forEach((tb) => {
             [-1, 1].forEach((s) => {
-                if (Math.random() < 0.35) return;
+                if (R() < 0.35) return;
                 const x = tb.x + s * (tb.w / 2 + 0.45), z = tb.z + rnd(-0.2, 0.2);
                 if (Math.abs(x) > room.W / 2 - 0.5) return;
                 box(room, 0.5, 0.08, 0.5, x, 0.48, z, 0x6b4423, { collide: true });
@@ -8503,8 +9127,8 @@
     function decorateRoom(room) {
         if (room.kind !== 'normal') return;
         for (let i = 0; i < rint(0, 2); i++) addWindowDeco(room);
-        if (Math.random() < 0.4) addClock(room);
-        if (Math.random() < 0.7) addEndTable(room);
+        if (R() < 0.4) addClock(room);
+        if (R() < 0.7) addEndTable(room);
         addChairs(room);
     }
 
@@ -9132,7 +9756,7 @@
     scareEl.style.cssText = 'position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-size:46vmin;background:rgba(0,0,0,.88);z-index:5';
     root.appendChild(scareEl);
 
-    const warmColor = new THREE.Color(0xffd9a0), tintColor = new THREE.Color();
+    const warmColor = new THREE.Color(0xffd9a0), tintColor = new THREE.Color(), lampColor = new THREE.Color();
 
     function sub(t, secs) {
         const el = $('dr-sub');
@@ -9222,7 +9846,7 @@
             light.position.set(c.l.x, c.l.y, c.l.z);
             let k = c.l.base * 1.15;
             if (S.flicker > 0 && !(Math.sin(S.time * 47 + i * 5.1) + Math.sin(S.time * 23.3 + i) > 0.4)) k *= 0.06;
-            light.color.copy(S.tint ? tintColor.setHex(S.tint) : warmColor);
+            light.color.copy(S.tint ? tintColor.setHex(S.tint) : (c.l.col ? lampColor.setHex(c.l.col) : warmColor));
             light.intensity = k;
         }
         const P = S.P, eq = equipped(), d = lookDir();
@@ -9313,7 +9937,7 @@
             if (!room) continue;
             if (x > -room.W / 2 + r && x < room.W / 2 - r && z < room.z0 - r && z > room.z1 + r) return true;
             const d = room.door;
-            if (d && d.open && d.t > 0.5 && Math.abs(x) < DOOR_W / 2 - r && Math.abs(z - room.z1) < r + 0.03) return true;
+            if (d && d.open && d.t > 0.5 && Math.abs(x - (room.doorX || 0)) < DOOR_W / 2 - r && Math.abs(z - room.z1) < r + 0.03) return true;
             if (room.broken) {
                 const nx = S.rooms[n + 1], lim = Math.min(room.W, nx ? nx.W : room.W) / 2 - r;
                 if (Math.abs(x) < lim && Math.abs(z - room.z1) < r + 0.03) return true;
@@ -9371,8 +9995,9 @@
         if (canStand(P.x, nz)) P.z = nz; else P.vz = 0;
         // walk into a door to open it (like the real thing)
         const dr = S.rooms[S.cur], door = dr && dr.door;
-        if (door && !door.open && !door.jammed && tvz < -0.5 && Math.abs(P.x) < DOOR_W / 2 + 0.25 && P.z - dr.z1 < PR + 0.65) {
-            if (!door.locked && !door.padlock && !door.bossLock) openDoor(door, false);
+        if (door && !door.open && !door.jammed && tvz < -0.5 && Math.abs(P.x - (dr.doorX || 0)) < DOOR_W / 2 + 0.25 && P.z - dr.z1 < PR + 0.65) {
+            if (!door.locked && !door.padlock && !door.bossLock && !door.powerLock) openDoor(door, false);
+            else if (door.powerLock && !(S.powerHintT > S.time)) { S.powerHintT = S.time + 4; sound.drLocked(); sub('The door has no power. Pull all 3 levers in this room!', 3); }
             else if (door.locked && (invCount('key') > 0 || invCount('skeleton') > 0)) tryDoor(door);
         }
         const strafe = P.vx * rx + P.vz * rz;
@@ -9427,9 +10052,9 @@
     }
     function applyShake(dt) {
         if (S.shake > 0.01) {
-            camera.position.x += (Math.random() - 0.5) * S.shake * 0.14;
-            camera.position.y += (Math.random() - 0.5) * S.shake * 0.14;
-            camera.rotation.z += (Math.random() - 0.5) * S.shake * 0.06;
+            camera.position.x += (R() - 0.5) * S.shake * 0.14;
+            camera.position.y += (R() - 0.5) * S.shake * 0.14;
+            camera.rotation.z += (R() - 0.5) * S.shake * 0.06;
         }
         S.shake = Math.max(0, S.shake - dt * 1.6);
     }
@@ -9447,7 +10072,7 @@
         sound.drCreak();
         S.hideCount++;
         if (S.hideCount >= 10) achieve('hide10', 'Professional Hider');
-        if (spot.kind === 'wardrobe' && !spot.library && Math.random() < 0.05) jack();
+        if (spot.kind === 'wardrobe' && !spot.library && R() < 0.05) jack();
     }
     function exitHide(forced) {
         const P = S.P, sp = P.hidden;
@@ -9479,7 +10104,7 @@
             r.inter.forEach((it, i) => { it.uid = bn + ':' + i; if (it.spot) it.spot.uid = it.uid; });
             try { batchRoom(r); } catch (e) { console.error('batch', e); }
             if (isLibLike(r)) { r.lib = S.library; S.library = keepLib; }
-            if (r.lib && r.kind === 'boss') withSeed('brk', () => { r.lib.brk = []; for (let i = 0; i < 8; i++) r.lib.brk.push(Math.random() < 0.5); if (r.lib.brk.every((v) => !v)) r.lib.brk[rint(0, 7)] = true; });
+            if (r.lib && r.kind === 'boss') withSeed('brk', () => { r.lib.brk = []; for (let i = 0; i < 8; i++) r.lib.brk.push(R() < 0.5); if (r.lib.brk.every((v) => !v)) r.lib.brk[rint(0, 7)] = true; });
             if (r.kind === 'library') {
                 r.door.padlock = true; r.door.locked = true;
             }
@@ -9512,7 +10137,9 @@
     }
     function updRoomHUD(room) {
         const el = $('dr-room');
-        el.querySelector('.n').textContent = 'ROOM ' + pad3(room.n);
+        const nt = 'ROOM ' + pad3(room.n);
+        if (el.querySelector('.n').textContent !== nt) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+        el.querySelector('.n').textContent = nt;
         el.querySelector('.t').textContent = room.title || '';
     }
     function onEnterRoom(room) {
@@ -9557,6 +10184,7 @@
     }
     function tryDoor(door) {
         if (door.open || door.jammed) return;
+        if (door.powerLock) { sound.drLocked(); bump(6); const rm = S.rooms[door.n - 1]; sub('No power. Pull the 3 levers in this room (' + ((rm && rm.levers) || 0) + ' / 3).', 3); return; }
         if (door.bossLock) { sound.drLocked(); bump(6); sub('Door 101 has no power. Find the fuses and fix the breaker by the entrance.', 3.5); return; }
         if (door.padlock && !(S.library && S.library.unlocked)) { showPad(); return; }
         if (door.locked) {
@@ -9569,7 +10197,7 @@
 
     // ---------- loot ----------
     function giveLoot(label) {
-        const r = Math.random();
+        const r = R();
         if (r < 0.42) { const g = rint(5, 30); S.gold += g; updGold(); sound.drCoin(); sub('Found 🪙 ' + g + (label ? ' ' + label : ''), 2.4); }
         else if (r < 0.50) { if (invAdd('lockpick', 1)) { sound.drBuy(); sub('Found a Lockpick! 🔓', 2.4); } }
         else if (r < 0.57) { if (invAdd('battery', 1)) { sound.drBuy(); sub('Found a Battery! 🔋', 2.4); } }
@@ -9585,7 +10213,7 @@
             if (invAdd('key', 1)) { sound.drUnlock(); sub('Found the KEY for door ' + pad3(d.room.n + 1) + '! 🔑', 3.2); }
             return;
         }
-        if (Math.random() < 0.04) { timothy(); return; }
+        if (R() < 0.04) { timothy(); return; }
         giveLoot();
     }
     function openChest(it) {
@@ -9594,7 +10222,7 @@
         it.opened = true; it.dead = true;
         sound.drUnlock(); sound.drDrawer(); bump(9);
         const g = rint(40, 110); S.gold += g; updGold(); sound.drCoin();
-        const r = Math.random();
+        const r = R();
         let extra = '';
         if (r < 0.12 && invAdd('crucifix', 1)) extra = ' + a CRUCIFIX ✝️!';
         else if (r < 0.4 && invAdd('battery', 1)) extra = ' + Battery';
@@ -9665,6 +10293,8 @@
             if (t.door.locked) return 'Locked door ' + pad3(t.door.n) + (invCount('key') || invCount('skeleton') ? ' — unlock' : ' (find the key)');
         }
         if (t.kind === 'chest') return invCount('lockpick') ? 'Pick the chest lock 🔓' : 'Locked chest (needs Lockpicks)';
+        if (t.kind === 'door' && t.door.powerLock) { const rm = S.rooms[t.door.n - 1]; return 'Door has no power (levers ' + ((rm && rm.levers) || 0) + ' / 3)'; }
+        if (t.kind === 'safe') { const rm = t.room; return rm && rm.vault && rm.vault.known ? 'Open the safe (' + rm.vault.code.join('-') + ')' : 'Wall safe (needs a 3-digit code)'; }
         if (t.kind === 'hide' && mpOn() && MPH.occupied) { const who = MPH.occupied(t.spot.uid); if (who) return 'Occupied by ' + who; }
         return t.label || 'Interact';
     }
@@ -9690,7 +10320,9 @@
             case 'drawer': openDrawer(t); break;
             case 'chest': openChest(t); break;
             case 'gold':
-                S.gold += t.amt; updGold(); t.dead = true; t.mesh.visible = false; sound.drCoin(); break;
+                t.dead = true; t.mesh.visible = false;
+                if (t.mimic) { scare('🪙😬', 0.55); sound.drScream(0.12); hurt(15, 'mimic'); sub('The gold had TEETH! (It was a Mimic. Twitchy gold = bad gold.)', 3.2); achieve('mimic', 'Fool\'s Gold'); break; }
+                S.gold += t.amt; updGold(); sound.drCoin(); break;
             case 'key':
                 if (invAdd('key', 1)) { t.dead = true; t.mesh.visible = false; sound.drUnlock(); sub('Got the key for door ' + pad3(t.room.n + 1) + '! 🔑', 3); }
                 break;
@@ -10107,7 +10739,7 @@
         if (!room) return false;
         for (let k = n - 2; k < n; k++) {
             const r = S.rooms[k];
-            if (r && r.door && !r.door.jammed) { r.door.open = true; r.door.t = 1; r.door.locked = false; r.door.padlock = false; r.door.bossLock = false; if (r.door.lockMesh) r.door.lockMesh.visible = false; if (r.door.pivot) r.door.pivot.rotation.y = 1.9; }
+            if (r && r.door && !r.door.jammed) { r.door.open = true; r.door.t = 1; r.door.locked = false; r.door.padlock = false; r.door.bossLock = false; r.door.powerLock = false; if (r.door.lockMesh) r.door.lockMesh.visible = false; if (r.door.pivot) r.door.pivot.rotation.y = 1.9; }
         }
         S.cur = n;
         if (room.mpClaim === undefined) room.mpClaim = false;
@@ -10124,7 +10756,7 @@
     function applyDoor(room, silent) {
         const d = room && room.door;
         if (!d || d.jammed) return;
-        if (d.locked || d.padlock) { d.locked = false; d.padlock = false; if (d.lockMesh) d.lockMesh.visible = false; }
+        if (d.locked || d.padlock || d.powerLock) { d.locked = false; d.padlock = false; d.powerLock = false; if (d.lockMesh) d.lockMesh.visible = false; }
         if (!d.open) { d.open = true; if (!silent && Math.abs(room.n - S.cur) <= 1) sound.drCreak(); }
     }
     function applyUnlock(room) {
@@ -10164,6 +10796,9 @@
                 break;
             }
             case 'fuse': if (t.mesh) t.mesh.visible = false; if (!silent) sub('🔌 ' + (who || 'A teammate') + ' grabbed a fuse!', 2.5); break;
+            case 'lever': t.dead = false; pullLever(t, true); break;
+            case 'safe': if (t.mesh) t.mesh.visible = false; if (!silent && near) sub('🔓 ' + (who || 'A teammate') + ' cracked the safe!', 2.5); break;
+            case 'snote': if (t.room && t.room.vault) t.room.vault.known = true; break;
             default: if (t.mesh) t.mesh.visible = false; if (t.icon) t.icon.visible = false;
         }
     }
@@ -10284,8 +10919,10 @@
         invAdd: invAdd, updGold: updGold, updHP: updHP, updEntsList: updEntsList, lockPointer: lockPointer,
         withSeed: withSeed, beginRun: function () { beginRun(); }, warpTo: warpTo, findInter: findInter, applyUse: applyUse, applyDoor: applyDoor, applyUnlock: applyUnlock,
         remoteRush: remoteRush, remoteEyes: remoteEyes, remoteChase: remoteChase, remoteChaseEnd: remoteChaseEnd, remoteAlex: remoteAlex, mcRemote: mcRemote,
+        roomEvent: function (k) { const room = S.rooms[S.cur]; if (room) startRoomEvent(k, room, false); },
+        remoteRoomEvent: function (k, n) { const room = S.rooms[n]; if (room) startRoomEvent(k, room, true); },
         remoteLib: remoteLib, remoteLibOpen: remoteLibOpen, remoteFuse: remoteFuse, remotePower: remotePower, respawn: mpRespawn, setPause: setPause,
-        runStatsLine: runStatsLine, lookDir: lookDir, walkable: walkable, hitsCol: hitsCol, ITEM_DEFS: ITEM_DEFS, pad3: pad3, TOTAL_ROOMS: TOTAL_ROOMS, HB: HB, CINE: CINE
+        ensureRoomsT: function (n) { ensureRooms(n); }, runStatsLine: runStatsLine, lookDir: lookDir, walkable: walkable, hitsCol: hitsCol, ITEM_DEFS: ITEM_DEFS, pad3: pad3, TOTAL_ROOMS: TOTAL_ROOMS, HB: HB, CINE: CINE
     };
 
     // ---------- input ----------
@@ -10369,7 +11006,7 @@
                     if (!d.open && d.t === 0 && d.slamSound !== false) { /* closed */ }
                 }
                 if (d.auto && !d.open && !d.jammed && n === S.cur) {
-                    if (Math.hypot(S.P.x, S.P.z - r.z1) < 4.2) openDoor(d, true);
+                    if (Math.hypot(S.P.x - (r.doorX || 0), S.P.z - r.z1) < 4.2) openDoor(d, true);
                 }
             }
             r.drawers.forEach((dr) => {
@@ -10462,6 +11099,7 @@
         }
         updHeartbeat(dt);
         updAnims(dt);
+        try { updRoomLife(dt); } catch (e) { console.error('room life', e); }
 
         // flashlight battery
         if (S.flashOn && equipped() === 'flashlight') {
@@ -10490,7 +11128,7 @@
     }
 
     function updEntsList(dt) {
-        const UPD = { rush: updRush, ambush: updRush, screech: updScreech, eyes: updEyes, halt: updHalt, janitor: updJanitor };
+        const UPD = { rush: updRush, ambush: updRush, screech: updScreech, eyes: updEyes, halt: updHalt, janitor: updJanitor, collapse: updCollapse, blackout: updBlackout, polter: updPolter };
         for (let i = S.ents.length - 1; i >= 0; i--) {
             const e = S.ents[i];
             try { UPD[e.type](e, dt); } catch (err) { console.error('DOORS entity', e.type, err); e.dead = true; }
@@ -11251,8 +11889,9 @@
     'use strict';
     const A = () => window.__doorsApi;
     const I = window.__doorsInternals || {};
-    const rnd = I.rnd || ((a, b) => a + Math.random() * (b - a));
-    const pick = I.pick || ((a) => a[Math.floor(Math.random() * a.length)]);
+    const RR = I.R || Math.random;   // seeded while rooms are generated (multiplayer needs identical rooms)
+    const rnd = I.rnd || ((a, b) => a + RR() * (b - a));
+    const pick = I.pick || ((a) => a[Math.floor(RR() * a.length)]);
     const clamp = I.clamp || ((v, a, b) => Math.max(a, Math.min(b, v)));
     const pad3 = I.pad3 || ((n) => String(n).padStart(3, '0'));
     const labelPlane = I.labelPlane;
@@ -11322,7 +11961,7 @@
     .pl-tag{margin-left:auto;font-size:11px;font-weight:bold;white-space:nowrap}
     #pl-sum{font-size:12px;margin-top:8px;color:#fde68a}
     #pl-timer{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:18px;font-weight:bold;letter-spacing:2px;color:#fde68a;text-shadow:0 0 8px #000}
-    #pl-prog{position:absolute;top:70px;left:18px;width:190px}
+    #pl-prog{position:absolute;top:84px;left:18px;width:190px}
     #pl-prog .dr-bar{height:6px}
     #pl-prog .lbl{font-size:10px;letter-spacing:1px;opacity:.8}
     #pl-mods{position:absolute;top:40px;left:50%;transform:translateX(-50%);font-size:16px;letter-spacing:3px;opacity:.85}
@@ -11416,7 +12055,7 @@
     const ACH_NAMES = {
         rich: 'Lunch Money', library: 'Shhh… The Library', jeff: 'Retail Therapy', shopper: 'Big Spender', bookworm: 'Bookworm', escape: 'Escaped The Hotel!',
         shatter: 'Wall? What Wall?', giggle: 'Tickle Fight', dupe: 'Wrong Number', revive: 'Second Chance', flare: 'Light It Up', calm: 'Time Out',
-        vend: 'Snack Attack', janitor: 'Mind The Wet Floor', teamwork: 'Better Together', reunion: 'Back From The Dead', power: 'Let There Be Light', boss: 'The Final Chapter', decoy: 'Decoy Reader', heart: 'Nerves Of Steel', flawless: 'Not A Scratch', chase1: 'Run, Chef, Run', chase2: 'Alex 2: Slime Harder', cross: 'Holy Hall Pass', half: 'Halfway There', floor2: 'Pest Control', glass: 'Glass Cannon', tiny: 'Smol Escape', knobs: 'Knob Hoarder'
+        vend: 'Snack Attack', janitor: 'Mind The Wet Floor', collapse: 'Hard Hat Not Included', blackout: 'Afraid Of The Dark? Nah.', polter: 'Who You Gonna Call?', safe: 'Safecracker', levers: 'Electrician', mimic: "Fool's Gold", teamwork: 'Better Together', reunion: 'Back From The Dead', power: 'Let There Be Light', boss: 'The Final Chapter', decoy: 'Decoy Reader', heart: 'Nerves Of Steel', flawless: 'Not A Scratch', chase1: 'Run, Chef, Run', chase2: 'Alex 2: Slime Harder', cross: 'Holy Hall Pass', half: 'Halfway There', floor2: 'Pest Control', glass: 'Glass Cannon', tiny: 'Smol Escape', knobs: 'Knob Hoarder'
     };
     function renderPause() {
         const S = A().S, el = $('pl-pausex');
@@ -11459,7 +12098,7 @@
     }
     function wallSpot(room, w, d) {
         for (let i = 0; i < 30; i++) {
-            const side = Math.random() < 0.5 ? -1 : 1;
+            const side = RR() < 0.5 ? -1 : 1;
             const x = side * (room.W / 2 - w / 2 - 0.1);
             const z = rnd(room.z1 + 3.5 + d / 2, room.z0 - 3 - d / 2);
             if (!overlaps(room, x, z, w, d)) { room.placed.push({ x: x, z: z, w: w, d: d }); return { x: x, z: z, side: side }; }
@@ -11593,14 +12232,14 @@
         const special = room.kind !== 'normal' && room.kind !== 'hallway';
         if (room.n < 1 || special) return;
         const n = room.n, f2 = modOn('floor2');
-        if (modOn('lightsout') && Math.random() < 0.85) darken(room);
+        if (modOn('lightsout') && RR() < 0.85) darken(room);
         if (room.kind === 'normal') {
-            if (n >= 3 && Math.random() < 0.22) addVending(room);
-            if (n >= 12 && Math.random() < (f2 ? 0.45 : 0.18)) addDupe(room);
-            if (n >= 8 && (room.dark || f2) && Math.random() < (f2 ? 0.6 : 0.4)) addGiggle(room);
+            if (n >= 3 && RR() < 0.22) addVending(room);
+            if (n >= 12 && RR() < (f2 ? 0.45 : 0.18)) addDupe(room);
+            if (n >= 8 && (room.dark || f2) && RR() < (f2 ? 0.6 : 0.4)) addGiggle(room);
         }
         if (n >= 18 || f2) {
-            const cnt = f2 ? 2 : (Math.random() < 0.35 ? 1 : 0);
+            const cnt = f2 ? 2 : (RR() < 0.35 ? 1 : 0);
             for (let i = 0; i < cnt; i++) addSnare(room);
         }
     };
@@ -11640,7 +12279,7 @@
             beep('triangle', 520, 1040, 0, 0.3, 0.07); beep('triangle', 780, 1560, 0.15, 0.3, 0.06);
             if (room.n === 50) A().achieve('half', 'Halfway There');
         }
-        if (modOn('rushhour') && !room.entered && room.mpClaim !== false && room.n >= 4 && room.kind !== 'jeff' && room.kind !== 'library' && !room.isChase && !room.isChaseStart && Math.random() < 0.38) pendingRush = { room: room, t: rnd(1.5, 4) };
+        if (modOn('rushhour') && !room.entered && room.mpClaim !== false && room.n >= 4 && room.kind !== 'jeff' && room.kind !== 'library' && !room.isChase && !room.isChaseStart && RR() < 0.38) pendingRush = { room: room, t: rnd(1.5, 4) };
         if (room.pl && room.pl.giggles && room.pl.giggles.some((g) => g.state === 'ceil') && !room.plGigHint) {
             room.plGigHint = true;
             setTimeout(() => { if (A().S.cur === room.n) A().sub(pick(['You hear giggling above you…', 'Something on the ceiling just snickered.', 'Hehehe… (that was not you)']), 3); }, 1200);
@@ -11842,7 +12481,7 @@
             pendingRush.t -= dt;
             if (pendingRush.t <= 0) {
                 const busy = S.ents.length > 0 || (S.chase && S.chase.phase !== 'done');
-                if (!busy && S.cur === pendingRush.room.n) api.startRush(Math.random() < 0.3 ? 'ambush' : 'rush', pendingRush.room);
+                if (!busy && S.cur === pendingRush.room.n) api.startRush(RR() < 0.3 ? 'ambush' : 'rush', pendingRush.room);
                 pendingRush = null;
             }
         }
@@ -12784,6 +13423,7 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
                 case 'use': { M.used.set(ev.u, who); const t = api.findInter(ev.u); if (t) api.applyUse(t, who); break; }
                 case 'rush': api.remoteRush(ev.n, ev.k, ev.ps, ev.tut); break;
                 case 'eyes': api.remoteEyes(ev.n); break;
+                case 'rev': api.remoteRoomEvent(ev.k, ev.n); break;
                 case 'chase': feed('🧑‍🍳 <b>' + esc(who) + '</b> woke ALEX!', col); api.remoteChase(ev.n, slotX()); break;
                 case 'chaseEnd': api.remoteChaseEnd(); break;
                 case 'alexHit': case 'alexStun': if (H.isAuth()) api.remoteAlex(ev.t, ev); break;

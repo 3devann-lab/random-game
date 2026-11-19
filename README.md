@@ -149,11 +149,45 @@ On the multiplayer screen, **🧪 LOCAL TEST** connects tabs **in the same brows
 
 ## 🆕 Other new DOORS stuff
 
+### Better room generation
+- **The hotel zig-zags:** exit doors are often off to the left or right, so you don't just walk in a straight line any more.
+- **Room shapes:** normal rooms, wide halls, long galleries, tiny closets, **maze rooms** (partition walls you have to snake through) and **pillar halls**.
+- **11 new themed rooms**, each with its own set pieces and sounds:
+  - 🍳 **Hotel Kitchen:** stoves, counters, and a walk-in fridge to hide in
+  - 💃 **Grand Ballroom:** a dance floor, a chandelier, and a piano that plays by itself
+  - 🌿 **Moonlit Greenhouse:** a fountain and blue moonlight
+  - 🚻 **Restrooms:** hide in the stalls
+  - 🗄️ **Manager's Office:** glowing monitors and a wall safe
+  - 🧺 **Laundry Room**
+  - 🔥 **Boiler Room:** steam vents and red light
+  - 🖼️ **Art Gallery:** statues that turn to face you when you're not looking
+  - 🧸 **Abandoned Playroom:** a rocking horse and a music box
+  - 🧹 **Broom, linen and coat closets**
+- **New hallways:** Portrait Hall (the eyes follow you), Collapsed Corridor and Service Corridor.
+- **Every room and hallway now has a hiding spot.** Before, about half the hallways had none, so Rush there meant certain death.
+- Rooms in a run don't repeat the same theme back to back. Lamps have colours (moonlight, boiler glow, office screens).
+
+### More stuff happens
+- **Cave-ins:** the ceiling collapses, so dodge the red rings on the floor.
+- **Blackouts:** every light in the room dies for a while… and something whispers.
+- **Poltergeists:** drawers slam, furniture jolts and books fly. It's harmless, but good luck staying calm.
+- **Creepy moments:** shadows crossing the room, bulbs bursting, knocking inside the walls.
+- **Never too quiet:** after 3 quiet rooms in a row, something is guaranteed to happen.
+- **Mimic gold:** if the gold twitches, it bites.
+
+### Puzzles
+- 🔐 **Wall safes:** find the sticky note with the code somewhere in the room to open the safe for gold and rare items.
+- ⚡ **Power-out rooms:** the room is dark and the door has no power. Find and pull all 3 levers.
+
+All of this is synced in multiplayer.
+
+### Earlier additions
 - **The Janitor:** stay in one room too long and the lights go grey, a bell rings, and he comes to mop you up. Keep moving! (Locked-door rooms give you extra time to find the key.)
 - **Lockers:** new hiding spots in the new *Staff Locker Room* and *Gym Storage* rooms.
 - **Seeds and daily runs:** type a seed, or press **📅 Daily run**, to play the exact same hotel as your friends and race for the best time. Your seed is shown at the end of each run.
 - **Run stats:** the end screen shows doors opened, rushes survived, hides, finds and close calls.
 - Fixed a bug that stopped the timer, progress bar, music and FPS counter from loading in DOORS mode.
+- Fixed hotels sometimes being generated slightly differently for different players (or browsers) with the same seed.
 
 ---
 
