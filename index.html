@@ -12,6 +12,29 @@
         }
     </script>
     <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,700&family=Rubik+Glitch&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <script id="hd-materials">
+    // HD GRAPHICS: on MEDIUM/HIGH quality every "Lambert" material becomes a per-pixel Phong material.
+    // (Lambert in three.js r128 only lights the corners of each surface, which is why floors looked flat.)
+    (function () {
+        if (typeof THREE === 'undefined') return;
+        let q = 'auto';
+        try { const st = JSON.parse(localStorage.getItem('cc_plus_settings') || '{}'); q = st.quality || 'auto'; } catch (e) { /* ignore */ }
+        if (q === 'auto') q = /Xbox|PlayStation|Nintendo|Android|iPhone|iPad|Mobile|Silk|CrKey|SmartTV|Tizen|WebOS/i.test(navigator.userAgent || '') ? 'low' : 'high';
+        window.__gfxBoot = q;
+        window.__hiMat = q === 'high';   // MEDIUM keeps the cheaper lighting but still gets post-processing
+        if (!window.__hiMat) return;
+        class HDMat extends THREE.MeshPhongMaterial {
+            constructor(p) {
+                super();
+                this.shininess = 14;
+                this.specular = new THREE.Color(0x161310);
+                if (p) this.setValues(p);
+            }
+        }
+        THREE.MeshLambertMaterial = HDMat;
+    })();
+    </script>
     <style>
         * {
             box-sizing: border-box;
@@ -4365,8 +4388,11 @@
             }
             if (window.prefabsTick) { try { window.prefabsTick(dt); } catch (err) { console.error('prefabs', err); } }
             if (window.plusTick) { try { window.plusTick(dt); } catch (err) { console.error('plus', err); } }
-            if (renderer) renderer.render(scene, camera);
-            if (window.__afterRender) { try { window.__afterRender(); } catch (err) { /* ignore */ } }
+            // HD path: scene + hands + post-processing; falls back to the plain renderer on LOW / errors
+            if (renderer && !(window.__postFX && window.__postFX.render(scene, camera))) {
+                renderer.render(scene, camera);
+                if (window.__afterRender) { try { window.__afterRender(); } catch (err) { /* ignore */ } }
+            }
         }
 
         // --- GAME FLOW (START / END / NEXT LEVEL) ---
@@ -4966,6 +4992,187 @@
             requestAnimationFrame(animate);
         }
         bootBackgroundScene();
+    </script>
+    <script id="postfx">
+// ================================================================
+// POST-PROCESSING: bloom, filmic tone curve, colour grading, vignette,
+// film grain, chromatic aberration and anti-aliasing. No extra libraries.
+// LOW graphics = off. MEDIUM = no bloom, half-res effects. HIGH = everything.
+// ================================================================
+(function () {
+    'use strict';
+    if (typeof THREE === 'undefined') return;
+    const PF = { ok: false, w: 0, h: 0, t: 0, failed: false, hdr: false, msaa: false };
+    window.__postFX = PF;
+    try { if (window.__hiMat) document.addEventListener('DOMContentLoaded', () => document.body.classList.add('hdfx')); if (window.__hiMat && document.body) document.body.classList.add('hdfx'); } catch (e) { /* ignore */ }
+    const VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+    const BRIGHT = `uniform sampler2D tDiffuse; uniform float uThr; varying vec2 vUv;
+        void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = max(c.r, max(c.g, c.b));
+        float k = smoothstep(uThr, uThr + 0.35, l); gl_FragColor = vec4(c * k, 1.0); }`;
+    const BLUR = `uniform sampler2D tDiffuse; uniform vec2 uDir; varying vec2 vUv;
+        void main(){ vec3 s = texture2D(tDiffuse, vUv).rgb * 0.227027;
+        s += texture2D(tDiffuse, vUv + uDir * 1.3846).rgb * 0.316216; s += texture2D(tDiffuse, vUv - uDir * 1.3846).rgb * 0.316216;
+        s += texture2D(tDiffuse, vUv + uDir * 3.2308).rgb * 0.070270; s += texture2D(tDiffuse, vUv - uDir * 3.2308).rgb * 0.070270;
+        gl_FragColor = vec4(s, 1.0); }`;
+    const COMP = `uniform sampler2D tDiffuse; uniform sampler2D tBloomA; uniform sampler2D tBloomB;
+        uniform vec2 uRes; uniform float uTime; uniform float uBloom; uniform float uExposure; uniform float uSat; uniform float uContrast;
+        uniform float uVig; uniform float uGrain; uniform float uCA; uniform float uFxaa; uniform vec3 uLift; uniform vec3 uGain; uniform float uHdr; uniform float uFlash;
+        varying vec2 vUv;
+        vec3 fxaa(vec2 uv){
+            vec2 px = 1.0 / uRes;
+            vec3 rgbNW = texture2D(tDiffuse, uv + vec2(-1.0,-1.0)*px).rgb, rgbNE = texture2D(tDiffuse, uv + vec2(1.0,-1.0)*px).rgb;
+            vec3 rgbSW = texture2D(tDiffuse, uv + vec2(-1.0,1.0)*px).rgb, rgbSE = texture2D(tDiffuse, uv + vec2(1.0,1.0)*px).rgb;
+            vec3 rgbM = texture2D(tDiffuse, uv).rgb; vec3 L = vec3(0.299, 0.587, 0.114);
+            float lNW = dot(rgbNW,L), lNE = dot(rgbNE,L), lSW = dot(rgbSW,L), lSE = dot(rgbSE,L), lM = dot(rgbM,L);
+            float lMin = min(lM, min(min(lNW,lNE), min(lSW,lSE))), lMax = max(lM, max(max(lNW,lNE), max(lSW,lSE)));
+            vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
+            float red = max((lNW + lNE + lSW + lSE) * 0.03125, 0.0078125);
+            float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + red);
+            dir = clamp(dir * rcp, -8.0, 8.0) * px;
+            vec3 a = 0.5 * (texture2D(tDiffuse, uv + dir * (1.0/3.0 - 0.5)).rgb + texture2D(tDiffuse, uv + dir * (2.0/3.0 - 0.5)).rgb);
+            vec3 b = a * 0.5 + 0.25 * (texture2D(tDiffuse, uv + dir * -0.5).rgb + texture2D(tDiffuse, uv + dir * 0.5).rgb);
+            float lB = dot(b, L);
+            return (lB < lMin || lB > lMax) ? a : b;
+        }
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        vec3 filmic(vec3 x){ // ACES fitted (Narkowicz)
+            return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+        }
+        void main(){
+            vec2 uv = vUv, cc = uv - 0.5; float r2 = dot(cc, cc);
+            vec3 col;
+            if (uFxaa > 0.5) col = fxaa(uv); else col = texture2D(tDiffuse, uv).rgb;
+            if (uCA > 0.0) { vec2 off = cc * r2 * uCA; col.r = mix(col.r, texture2D(tDiffuse, uv + off).r, 0.85); col.b = mix(col.b, texture2D(tDiffuse, uv - off).b, 0.85); }
+            col += (texture2D(tBloomA, uv).rgb * 0.6 + texture2D(tBloomB, uv).rgb * 0.8) * uBloom;
+            col *= uExposure;
+            col = mix(col, filmic(col * 1.15), uHdr);
+            // colour grade: lift shadows / tint highlights, then contrast + saturation
+            col = col * uGain + uLift * (1.0 - col);
+            col = clamp((col - 0.5) * uContrast + 0.5, 0.0, 1.0);
+            float l = dot(col, vec3(0.299, 0.587, 0.114));
+            col = mix(vec3(l), col, uSat);
+            col += uFlash;
+            // vignette + grain
+            col *= mix(1.0, smoothstep(0.85, 0.18, r2 * 1.6), uVig);
+            float g = hash(uv * uRes + fract(uTime * 13.37) * 100.0) - 0.5;
+            col += g * uGrain * (1.0 - l * 0.6);
+            gl_FragColor = vec4(max(col, 0.0), 1.0);
+        }`;
+    function mkMat(fs, uniforms) {
+        return new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: fs, uniforms: uniforms, depthTest: false, depthWrite: false });
+    }
+    function quality() {
+        try { if (window.__gfxQ) return window.__gfxQ(); } catch (e) { /* ignore */ }
+        return window.__gfxBoot || 'high';
+    }
+    function init() {
+        if (typeof renderer === 'undefined' || !renderer) return false;
+        const caps = renderer.capabilities || {};
+        PF.gl2 = !!caps.isWebGL2;
+        const ext = renderer.extensions;
+        PF.mode = quality();
+        const full = PF.mode === 'high';
+        PF.hdr = full && PF.gl2 && !!(ext && ext.get && (ext.get('EXT_color_buffer_float') || ext.get('EXT_color_buffer_half_float')));
+        const type = PF.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType;
+        const opt = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, type: type, depthBuffer: true, stencilBuffer: false };
+        PF.msaa = false;
+        if (full && PF.gl2 && THREE.WebGLMultisampleRenderTarget) { PF.rt = new THREE.WebGLMultisampleRenderTarget(4, 4, opt); PF.rt.samples = 4; PF.msaa = true; }
+        else PF.rt = new THREE.WebGLRenderTarget(4, 4, opt);
+        PF.w = PF.h = 0;
+        const o2 = Object.assign({}, opt, { depthBuffer: false });
+        PF.b1 = new THREE.WebGLRenderTarget(4, 4, o2); PF.b2 = new THREE.WebGLRenderTarget(4, 4, o2);
+        PF.c1 = new THREE.WebGLRenderTarget(4, 4, o2); PF.c2 = new THREE.WebGLRenderTarget(4, 4, o2);
+        PF.mBright = mkMat(BRIGHT, { tDiffuse: { value: null }, uThr: { value: 0.72 } });
+        PF.mBlur = mkMat(BLUR, { tDiffuse: { value: null }, uDir: { value: new THREE.Vector2(1, 0) } });
+        PF.mComp = mkMat(COMP, {
+            tDiffuse: { value: null }, tBloomA: { value: null }, tBloomB: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, uTime: { value: 0 },
+            uBloom: { value: 0.7 }, uExposure: { value: 1.0 }, uSat: { value: 0.88 }, uContrast: { value: 1.08 }, uVig: { value: 0.6 }, uGrain: { value: 0.045 },
+            uCA: { value: 0.012 }, uFxaa: { value: PF.msaa ? 0 : 1 }, uLift: { value: new THREE.Vector3(0.012, 0.014, 0.022) }, uGain: { value: new THREE.Vector3(1.03, 1.0, 0.95) }, uHdr: { value: 0 }, uFlash: { value: 0 }
+        });
+        PF.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), PF.mComp);
+        PF.quad.frustumCulled = false;
+        PF.scene = new THREE.Scene(); PF.scene.add(PF.quad);
+        PF.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        PF.ok = true;
+        return true;
+    }
+    const sz = new THREE.Vector2();
+    function resize() {
+        renderer.getDrawingBufferSize(sz);
+        const w = Math.max(4, Math.floor(sz.x)), h = Math.max(4, Math.floor(sz.y));
+        if (w === PF.w && h === PF.h) return;
+        PF.w = w; PF.h = h;
+        PF.rt.setSize(w, h);
+        const q = quality() === 'medium' ? 4 : 3;
+        const bw = Math.max(4, w >> (q - 1)), bh = Math.max(4, h >> (q - 1));
+        PF.b1.setSize(bw, bh); PF.b2.setSize(bw, bh);
+        PF.c1.setSize(Math.max(4, bw >> 1), Math.max(4, bh >> 1)); PF.c2.setSize(Math.max(4, bw >> 1), Math.max(4, bh >> 1));
+        PF.mComp.uniforms.uRes.value.set(w, h);
+    }
+    function pass(mat, src, dst) {
+        PF.quad.material = mat;
+        if (mat.uniforms.tDiffuse) mat.uniforms.tDiffuse.value = src;
+        renderer.setRenderTarget(dst);
+        renderer.render(PF.scene, PF.cam);
+    }
+    function blur(src, tmp, dst, w, h, spread) {
+        PF.mBlur.uniforms.uDir.value.set(spread / w, 0); pass(PF.mBlur, src, tmp);
+        PF.mBlur.uniforms.uDir.value.set(0, spread / h); pass(PF.mBlur, tmp.texture, dst);
+    }
+    // per-mode look
+    function grade() {
+        const u = PF.mComp.uniforms, doors = !!window.doorsActive;
+        const S = window.__doorsState;
+        if (doors) {
+            u.uExposure.value = 0.94; u.uSat.value = 0.8; u.uContrast.value = 1.1; u.uVig.value = 0.8; u.uGrain.value = 0.045;
+            u.uLift.value.set(0.008, 0.011, 0.02); u.uGain.value.set(1.03, 0.99, 0.92); PF.mBright.uniforms.uThr.value = PF.hdr ? 0.95 : 0.8; u.uBloom.value = 0.6;
+            const dead = S && S.dead;
+            if (dead) { u.uSat.value = 0.25; u.uContrast.value = 1.2; }
+        } else {
+            const menu = !(typeof gameActive !== 'undefined' && gameActive);
+            u.uExposure.value = menu ? 0.8 : 0.74; u.uSat.value = 0.95; u.uContrast.value = 1.16; u.uVig.value = 0.55; u.uGrain.value = 0.02;
+            u.uLift.value.set(0.0, 0.0, 0.006); u.uGain.value.set(1.0, 0.98, 0.95); PF.mBright.uniforms.uThr.value = PF.hdr ? 1.4 : 0.97; u.uBloom.value = 0.18;
+        }
+        u.uHdr.value = PF.hdr ? 1 : 0;
+    }
+    // returns true if it drew the frame (scene + first-person hands + effects)
+    PF.render = function (scn, cam) {
+        if (PF.failed) return false;
+        const q = quality();
+        if (q === 'low') return false;
+        if (PF.ok && PF.mode !== q) { [PF.rt, PF.b1, PF.b2, PF.c1, PF.c2].forEach((r) => { try { r.dispose(); } catch (e) { /* ignore */ } }); PF.ok = false; }
+        if (!PF.ok && !init()) return false;
+        PF.mComp.uniforms.uFxaa.value = PF.msaa ? 0 : 1;
+        try {
+            resize();
+            PF.t += 1 / 60;
+            renderer.setRenderTarget(PF.rt);
+            renderer.clear();
+            renderer.render(scn, cam);
+            if (window.__afterRender) { try { window.__afterRender(); } catch (e) { /* ignore */ } }
+            const src = PF.rt.texture, bloom = q === 'high';
+            if (bloom) {
+                pass(PF.mBright, src, PF.b1);
+                blur(PF.b1.texture, PF.b2, PF.b1, PF.b1.width, PF.b1.height, 1.2);
+                pass(PF.mBlur, PF.b1.texture, PF.c1);   // downsample
+                blur(PF.c1.texture, PF.c2, PF.c1, PF.c1.width, PF.c1.height, 1.6);
+            }
+            grade();
+            const u = PF.mComp.uniforms;
+            u.tBloomA.value = PF.b1.texture; u.tBloomB.value = PF.c1.texture;
+            if (!bloom) u.uBloom.value = 0;
+            if (q === 'medium') { u.uCA.value = 0; } else u.uCA.value = window.doorsActive ? 0.014 : 0.006;
+            u.uTime.value = PF.t;
+            pass(PF.mComp, src, null);
+            return true;
+        } catch (e) {
+            console.error('postFX disabled:', e);
+            PF.failed = true;
+            renderer.setRenderTarget(null);
+            return false;
+        }
+    };
+})();
     </script>
     <script id="doors-mode">
 /* ============================================================
@@ -8540,6 +8747,52 @@
             speckle(g, w, h, 900, 0.12, true);
         });
     }
+    function texCone() {   // soft vertical fade for the light cones under ceiling lamps
+        return canvasTex('lightcone', 8, 128, (g, w, h) => {
+            const gr = g.createLinearGradient(0, 0, 0, h);
+            gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+            g.fillStyle = gr; g.fillRect(0, 0, w, h);
+        });
+    }
+    function texBlob() {   // soft round contact shadow
+        return canvasTex('blobshadow', 64, 64, (g, w, h) => {
+            const gr = g.createRadialGradient(w / 2, h / 2, 2, w / 2, h / 2, w / 2);
+            gr.addColorStop(0, 'rgba(0,0,0,0.85)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+            g.fillStyle = gr; g.fillRect(0, 0, w, h);
+        });
+    }
+    // soft shadows on the floor under every piece of furniture (grounds things instead of floating)
+    function addContactShadows(room) {
+        if (!window.__hiMat) return;
+        if (!addContactShadows.mat) addContactShadows.mat = new THREE.MeshBasicMaterial({ map: texBlob(), transparent: true, depthWrite: false, opacity: 0.75, color: 0x000000, polygonOffset: true, polygonOffsetFactor: -2 });
+        const pos = [], uv = [], idx = [];
+        const quad = (cx, cz, w, d) => {
+            const o = pos.length / 3;
+            pos.push(cx - w / 2, 0.018, cz - d / 2, cx + w / 2, 0.018, cz - d / 2, cx + w / 2, 0.018, cz + d / 2, cx - w / 2, 0.018, cz + d / 2);
+            uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+            idx.push(o, o + 2, o + 1, o, o + 3, o + 2);
+        };
+        room.col.forEach((c) => {
+            const w = c.x1 - c.x0, d = c.z1 - c.z0;
+            if (w > 6 || d > 6 || w < 0.2 || d < 0.2) return;
+            quad((c.x0 + c.x1) / 2, (c.z0 + c.z1) / 2, w + 0.7, d + 0.7);
+        });
+        if (idx.length) {
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+            g.setIndex(idx);
+            const m = new THREE.Mesh(g, addContactShadows.mat); m.renderOrder = 1;
+            room.group.add(m);
+        }
+        // darker band where walls meet the floor (cheap ambient occlusion)
+        if (!addContactShadows.edge) addContactShadows.edge = new THREE.MeshBasicMaterial({ map: texCone(), transparent: true, depthWrite: false, opacity: 0.55, color: 0x000000 });
+        [-1, 1].forEach((sd) => {
+            const m = new THREE.Mesh(new THREE.PlaneGeometry(room.D, 0.9), addContactShadows.edge);
+            m.rotation.x = -Math.PI / 2; m.rotation.z = sd * Math.PI / 2; m.position.set(sd * (room.W / 2 - 0.45), 0.016, (room.z0 + room.z1) / 2);
+            room.group.add(m);
+        });
+    }
     function texDoor(locked) {
         return canvasTex('door' + (locked ? 1 : 0), 128, 256, (g, w, h) => {
             const base = locked ? [70, 48, 44] : [118, 72, 38];
@@ -8603,6 +8856,11 @@
         if (tmatCache[k]) return tmatCache[k];
         // one shared GPU texture per pattern; the repeat is baked into each mesh's UVs (see uvGeo)
         const m = new THREE.MeshLambertMaterial({ map: tex, color: color === undefined ? 0xffffff : color, emissive: emissive || 0x000000 });
+        if (window.__hiMat) {   // the texture doubles as a bump map so grain, carpet and wallpaper catch the light
+            m.bumpMap = tex; m.bumpScale = /wood|grain|door/.test(key) ? 0.028 : /carpet|ceil/.test(key) ? 0.02 : 0.012;
+            m.shininess = /wood|grain|door/.test(key) ? 26 : 6;
+            m.specular = new THREE.Color(/wood|grain|door/.test(key) ? 0x2a2218 : 0x0c0a08);
+        }
         m.userData.shared = true; m.userData.rep = [rx, ry];
         tmatCache[k] = m;
         return m;
@@ -8670,8 +8928,16 @@
         const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), basic(0xfff1c8));
         bulb.position.y = -0.74; g.add(bulb);
         const h = halo(0xffc98a, 2.3, 0.5); h.position.y = -0.78; g.add(h);
+        let cone = null;
+        if (window.__hiMat) {
+            if (!addLamp.coneMat) addLamp.coneMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, map: texCone(), transparent: true, opacity: 0.045, depthWrite: false, side: THREE.FrontSide, blending: THREE.AdditiveBlending, fog: true });
+            if (!addLamp.coneGeo) addLamp.coneGeo = new THREE.CylinderGeometry(0.34, 1.9, WALL_H - 0.85, 18, 1, true);
+            cone = new THREE.Mesh(addLamp.coneGeo, addLamp.coneMat);
+            cone.position.y = -0.85 - (WALL_H - 0.85) / 2; cone.renderOrder = 2; g.add(cone);
+            cone.userData.noBatch = true;
+        }
         room.group.add(g);
-        const lamp = { x: x, y: WALL_H - 0.85, z: z, mesh: shade, base: 0.95, halo: h, bulb: bulb, hb: 0.5 };
+        const lamp = { x: x, y: WALL_H - 0.85, z: z, mesh: shade, base: 0.95, halo: h, bulb: bulb, hb: 0.5, cone: cone };
         room.lamps.push(lamp);
         return shade;
     }
@@ -8713,6 +8979,7 @@
                 if (k && S.flicker > 0 && !(Math.sin(S.time * 47 + i * 5.1) + Math.sin(S.time * 23.3 + i) > 0.4)) k = 0.05;
                 l.halo.material.opacity = (l.hb || 0.5) * k;
                 if (l.bulb) l.bulb.visible = k > 0.2;
+                if (l.cone) l.cone.visible = k > 0.2 && !S.tint && Math.hypot(l.x - camera.position.x, l.z - camera.position.z) > 1.9;
                 if (S.tint && l.halo.material.color) l.halo.material.color.setHex(S.tint); else if (l.halo.material.color) l.halo.material.color.setHex(l.col || (l.sconce ? 0xffb870 : 0xffc98a));
             });
         }
@@ -9357,15 +9624,39 @@
         parent.add(me); return me;
     }
     function buildArm(side, skinM, sleeveM, cuffM) {
-        // simple blocky "toy" arm: a square sleeve and a mitten-block hand, no fingers
+        // a proper arm: jacket sleeve + cuff, wrist, rounded palm, 4 jointed fingers and a thumb
         const arm = new THREE.Group();
-        hm(arm, new THREE.BoxGeometry(0.11, 0.11, 0.44), sleeveM, 0, 0, 0.27);
-        hm(arm, new THREE.BoxGeometry(0.118, 0.118, 0.04), cuffM, 0, 0, 0.06);
+        const X = (x) => x * side;
+        const sl = hm(arm, new THREE.CylinderGeometry(0.05, 0.064, 0.52, 16), sleeveM, 0, 0, 0.33); sl.rotation.x = Math.PI / 2;
+        for (let i = 0; i < 3; i++) { const f = hm(arm, new THREE.TorusGeometry(0.056 + i * 0.002, 0.006, 6, 18), sleeveM, 0, 0.002, 0.13 + i * 0.09); f.scale.set(1, 1, 0.8); }
+        const cf = hm(arm, new THREE.CylinderGeometry(0.054, 0.054, 0.045, 16), cuffM, 0, 0, 0.075); cf.rotation.x = Math.PI / 2;
+        const wr = hm(arm, new THREE.CylinderGeometry(0.031, 0.036, 0.06, 12), skinM, 0, 0, 0.035); wr.rotation.x = Math.PI / 2;
         const hand = new THREE.Group(); arm.add(hand);
-        hm(hand, new THREE.BoxGeometry(0.1, 0.1, 0.1), skinM, 0, 0, -0.01);
-        const th = new THREE.Group(); hand.add(th);
-        const th2 = new THREE.Group(); th.add(th2);
-        return { arm: arm, hand: hand, fingers: [], th: th, th2: th2 };
+        const palm = hm(hand, new THREE.SphereGeometry(0.05, 16, 12), skinM, 0, 0, -0.012); palm.scale.set(0.9, 0.44, 1.05);
+        const back = hm(hand, new THREE.SphereGeometry(0.045, 14, 10), skinM, 0, 0.008, -0.03); back.scale.set(0.95, 0.38, 0.6);
+        const fingers = [];
+        const segG = [new THREE.CylinderGeometry(0.0105, 0.0115, 0.034, 8), new THREE.CylinderGeometry(0.0098, 0.0105, 0.027, 8), new THREE.CylinderGeometry(0.009, 0.0098, 0.02, 8)];
+        const tipG = new THREE.SphereGeometry(0.0092, 8, 6), knG = new THREE.SphereGeometry(0.0118, 8, 6);
+        [-0.031, -0.011, 0.009, 0.028].forEach((fx, i) => {
+            const len = [0.92, 1.0, 0.97, 0.8][i];
+            const base = new THREE.Group(); base.position.set(X(fx), 0.004, -0.058 + Math.abs(fx) * 0.18); base.rotation.z = Math.PI; base.rotation.y = X(fx) * -1.6; hand.add(base);
+            hm(base, knG, skinM, 0, 0, 0);
+            const f = new THREE.Group(); base.add(f);
+            const s1 = hm(f, segG[0], skinM, 0, 0, -0.017 * len); s1.rotation.x = Math.PI / 2; s1.scale.y = len;
+            const k2 = new THREE.Group(); k2.position.z = -0.034 * len; f.add(k2);
+            const s2 = hm(k2, segG[1], skinM, 0, 0, -0.0135 * len); s2.rotation.x = Math.PI / 2; s2.scale.y = len;
+            const k3 = new THREE.Group(); k3.position.z = -0.027 * len; k2.add(k3);
+            const s3 = hm(k3, segG[2], skinM, 0, 0, -0.01 * len); s3.rotation.x = Math.PI / 2; s3.scale.y = len;
+            hm(k3, tipG, skinM, 0, 0, -0.02 * len);
+            fingers.push({ f: f, k2: k2, k3: k3 });
+        });
+        const th = new THREE.Group(); th.position.set(X(-0.042), 0.006, -0.02); th.rotation.set(0.3, X(-0.75), X(-0.5)); hand.add(th);
+        const thf = new THREE.Group(); thf.rotation.z = Math.PI; th.add(thf);
+        const t1 = hm(thf, new THREE.CylinderGeometry(0.0125, 0.014, 0.034, 8), skinM, 0, 0, -0.017); t1.rotation.x = Math.PI / 2;
+        const th2 = new THREE.Group(); th2.position.z = -0.034; thf.add(th2);
+        const t2 = hm(th2, new THREE.CylinderGeometry(0.011, 0.0125, 0.028, 8), skinM, 0, 0, -0.014); t2.rotation.x = Math.PI / 2;
+        hm(th2, new THREE.SphereGeometry(0.011, 8, 6), skinM, 0, 0, -0.028);
+        return { arm: arm, hand: hand, fingers: fingers, th: th, th2: th2 };
     }
     function curl(A, amt, thumb) {
         A.fingers.forEach((f, i) => { const c = amt * (1 + i * 0.05); f.f.rotation.x = c * 0.9; f.k2.rotation.x = c * 1.1; f.k3.rotation.x = c * 0.8; });
@@ -9475,7 +9766,8 @@
         const g = new THREE.Group();
         H.scene.add(g);
         H.view = new THREE.Group(); g.add(H.view);
-        const skin = hl(0xf5c96b, 0x2a1c08), sleeve = hl(0x3d7be0, 0x0a1830), cuff = hl(0x2a5bb0, 0x081428);
+        const skin = hl(0xd49a74, 0x140a05), sleeve = hl(0x2b303a, 0x040508), cuff = hl(0x1c1f26, 0x030304);
+        if (window.__hiMat) { skin.shininess = 18; skin.specular = new THREE.Color(0x2a1a14); sleeve.shininess = 4; cuff.shininess = 4; }
         H.R = buildArm(1, skin, sleeve, cuff);
         H.L = buildArm(-1, skin, sleeve, cuff);
         H.view.add(H.R.arm); H.view.add(H.L.arm);
@@ -9552,10 +9844,11 @@
         const br = localBrightness();
         H.br += (br - H.br) * Math.min(1, dt * 5);
         const tint = S.tint ? S.tint : 0xffe6c8;
-        H.amb.color.setHex(tint); H.amb.intensity = H.br * 0.6;
-        H.dir.intensity = H.br * 0.7;
+        const HI = window.__hiMat ? 0.62 : 1;
+        H.amb.color.setHex(tint); H.amb.intensity = H.br * 0.6 * HI;
+        H.dir.intensity = H.br * 0.7 * HI;
         const lit = eq === 'lighter' && !P.hidden;
-        H.pl.intensity = lit ? 1.6 + Math.sin(t * 13) * 0.2 : (eq === 'revive' ? 0.8 : 0);
+        H.pl.intensity = lit ? (1.6 + Math.sin(t * 13) * 0.2) * HI : (eq === 'revive' ? 0.8 * HI : 0);
         H.pl.color.setHex(eq === 'revive' ? 0x66ccff : 0xffa040);
         H.pl.position.copy(camera.position);
         if (H.flame) { H.flame.visible = lit; H.flame.scale.set(1 + Math.sin(t * 17) * 0.15, 1 + Math.sin(t * 23) * 0.25, 1); H.flame.rotation.z = Math.sin(t * 7) * 0.08; }
@@ -9577,7 +9870,7 @@
         if (q === 'auto') q = (window.__gfxLost || /Xbox|PlayStation|Nintendo|Android|iPhone|iPad|Mobile|Silk|CrKey|SmartTV|Tizen|WebOS/i.test(navigator.userAgent || '')) ? 'low' : 'high';
         return q;
     }
-    function gfxLights() { const q = gfxLevel(); return q === 'low' ? 4 : q === 'medium' ? 6 : 8; }
+    function gfxLights() { const q = gfxLevel(); return q === 'low' ? 4 : q === 'medium' ? 6 : (window.__hiMat ? 6 : 8); }
 
     // ---- UV-baked geometry so one texture can be shared by every surface ----
     const uvCache = {};
@@ -9813,11 +10106,12 @@
     function setupLights() {
         removeLights();
         const NL = gfxLights();
-        for (let i = 0; i < NL; i++) { const l = new THREE.PointLight(0xffd9a0, 0, 15); scene.add(l); lightPool.push(l); }
-        lighter = new THREE.PointLight(0xffb060, 0, 9);
+        const HI = !!window.__hiMat;   // per-pixel lighting: real falloff so lamps make pools of light
+        for (let i = 0; i < NL; i++) { const l = new THREE.PointLight(0xffd9a0, 0, HI ? 13 : 15, HI ? 2 : 1); scene.add(l); lightPool.push(l); }
+        lighter = new THREE.PointLight(0xffb060, 0, HI ? 7.5 : 9, HI ? 2 : 1);
         fxLight = new THREE.PointLight(0xff5040, 0, 24); scene.add(fxLight);
         scene.add(lighter);
-        spot = new THREE.SpotLight(0xfff4d6, 0, 26, 0.5, 0.5, 1);
+        spot = new THREE.SpotLight(0xfff4d6, 0, 26, 0.5, 0.55, HI ? 1.6 : 1);
         spotTarget = new THREE.Object3D();
         scene.add(spot); scene.add(spotTarget);
         spot.target = spotTarget;
@@ -9847,15 +10141,15 @@
             let k = c.l.base * 1.15;
             if (S.flicker > 0 && !(Math.sin(S.time * 47 + i * 5.1) + Math.sin(S.time * 23.3 + i) > 0.4)) k *= 0.06;
             light.color.copy(S.tint ? tintColor.setHex(S.tint) : (c.l.col ? lampColor.setHex(c.l.col) : warmColor));
-            light.intensity = k;
+            light.intensity = window.__hiMat ? k * 1.7 : k;
         }
         const P = S.P, eq = equipped(), d = lookDir();
         const hid = !!P.hidden;
         lighter.position.set(camera.position.x + d.x * 0.5, camera.position.y - 0.15, camera.position.z + d.z * 0.5);
-        lighter.intensity = (eq === 'lighter' && !hid) ? 1.15 + Math.sin(S.time * 9) * 0.06 : 0;
+        lighter.intensity = (eq === 'lighter' && !hid) ? (window.__hiMat ? 0.72 : 1.15) + Math.sin(S.time * 9) * 0.06 + Math.sin(S.time * 23.7) * 0.04 : 0;
         spot.position.copy(camera.position);
         spotTarget.position.set(camera.position.x + d.x * 12, camera.position.y + d.y * 12, camera.position.z + d.z * 12);
-        spot.intensity = (S.flashOn && eq === 'flashlight' && S.battery > 0 && !hid) ? 1.7 : 0;
+        spot.intensity = (S.flashOn && eq === 'flashlight' && S.battery > 0 && !hid) ? (window.__hiMat ? 2.6 : 1.7) : 0;
     }
 
     // ---------- inventory ----------
@@ -10102,6 +10396,7 @@
             });
             // stable ids so multiplayer can say "drawer 12:3 was opened"
             r.inter.forEach((it, i) => { it.uid = bn + ':' + i; if (it.spot) it.spot.uid = it.uid; });
+            try { addContactShadows(r); } catch (e) { console.error('shadows', e); }
             try { batchRoom(r); } catch (e) { console.error('batch', e); }
             if (isLibLike(r)) { r.lib = S.library; S.library = keepLib; }
             if (r.lib && r.kind === 'boss') withSeed('brk', () => { r.lib.brk = []; for (let i = 0; i < 8; i++) r.lib.brk.push(R() < 0.5); if (r.lib.brk.every((v) => !v)) r.lib.brk[rint(0, 7)] = true; });
@@ -10474,7 +10769,7 @@
         scene.background = new THREE.Color(0x050302);
         scene.fog = new THREE.FogExp2(0x0a0604, gfxLevel() === 'low' ? 0.04 : 0.034);
         ambientLight.color.setHex(0xffd9b0);
-        ambientLight.intensity = 0.2;
+        ambientLight.intensity = window.__hiMat ? 0.12 : 0.2;
         playerLight.intensity = 0;
         worldGroup.visible = false;
         camera.far = gfxLevel() === 'low' ? 48 : 60; camera.updateProjectionMatrix();
@@ -11150,6 +11445,310 @@
     window.__doorsState = S;
 })();
 
+    </script>
+    <script id="audio-hd">
+// ================================================================
+// HD AUDIO: mixing chain (compressor + limiter), procedural reverb,
+// smoother synth voice and redesigned DOORS sound effects + room tone.
+// ================================================================
+(function () {
+    'use strict';
+    if (typeof SoundEngine === 'undefined') return;
+    const P = SoundEngine.prototype;
+    const rr = (a, b) => a + Math.random() * (b - a);
+
+    function makeIR(ctx, secs, decay) {
+        const len = Math.floor(ctx.sampleRate * secs), buf = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let c = 0; c < 2; c++) {
+            const d = buf.getChannelData(c);
+            for (let i = 0; i < len; i++) {
+                const t = i / len;
+                // early reflections + diffuse tail, slightly darker over time
+                const er = i < ctx.sampleRate * 0.08 && Math.random() < 0.004 ? (Math.random() * 2 - 1) * 0.8 : 0;
+                d[i] = (er + (Math.random() * 2 - 1) * Math.pow(1 - t, decay)) * (1 - t * 0.3);
+            }
+        }
+        return buf;
+    }
+    function makeNoise(ctx, kind) {
+        const len = ctx.sampleRate * 3, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, last = 0;
+        for (let i = 0; i < len; i++) {
+            const w = Math.random() * 2 - 1;
+            if (kind === 'white') d[i] = w * 0.5;
+            else if (kind === 'brown') { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.2; }
+            else { // pink (Paul Kellet)
+                b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+                b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+                d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
+            }
+        }
+        return buf;
+    }
+    function distCurve(k) {
+        const n = 1024, c = new Float32Array(n);
+        for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = (1 + k) * x / (1 + k * Math.abs(x)); }
+        return c;
+    }
+
+    function build(self) {
+        const ctx = self.ctx;
+        try { self.master.disconnect(); } catch (e) { /* ignore */ }
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -20; comp.knee.value = 14; comp.ratio.value = 3.5; comp.attack.value = 0.005; comp.release.value = 0.22;
+        const lim = ctx.createDynamicsCompressor();
+        lim.threshold.value = -2.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.08;
+        self.master.connect(comp); comp.connect(lim); lim.connect(ctx.destination);
+        self.bus = ctx.createGain(); self.bus.connect(self.master);
+        self.verb = ctx.createConvolver(); self.verb.buffer = makeIR(ctx, 2.6, 2.6);
+        self.verbSend = ctx.createGain(); self.verbSend.gain.value = 0.15;
+        self.verbOut = ctx.createGain(); self.verbOut.gain.value = 0.9;
+        self.bus.connect(self.verbSend); self.verbSend.connect(self.verb); self.verb.connect(self.verbOut); self.verbOut.connect(self.master);
+        self.nW = makeNoise(ctx, 'white'); self.nP = makeNoise(ctx, 'pink'); self.nB = makeNoise(ctx, 'brown');
+        self.dist = ctx.createWaveShaper(); self.dist.curve = distCurve(18);
+        self.hd = true;
+        roomTone(self);
+    }
+    const origInit = P.init;
+    P.init = function () {
+        origInit.call(this);
+        if (this.ctx && !this.hd) { try { build(this); } catch (e) { console.error('audio-hd', e); } }
+    };
+    Object.defineProperty(P, 'dest', { configurable: true, get() { return this.bus || this.master; } });
+
+    // ---------- building blocks ----------
+    function T(self, d) { return self.ctx.currentTime + (d || 0); }
+    function out(self, node, pan, wet) {
+        let n = node;
+        if (pan && self.ctx.createStereoPanner) { const p = self.ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan)); n.connect(p); n = p; }
+        n.connect(self.dest);
+        if (wet && self.verb) { const w = self.ctx.createGain(); w.gain.value = wet; n.connect(w); w.connect(self.verb); }
+    }
+    function env(g, t, a, peak, dur, curve) {
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + a);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(a + 0.01, dur));
+    }
+    // filtered noise hit
+    function nz(self, o) {
+        const ctx = self.ctx, t = T(self, o.d);
+        const src = ctx.createBufferSource(); src.buffer = o.kind === 'brown' ? self.nB : o.kind === 'pink' ? self.nP : self.nW;
+        let node = src;
+        (o.f || []).forEach((f) => {
+            const b = ctx.createBiquadFilter(); b.type = f[0]; b.frequency.setValueAtTime(f[1], t);
+            if (f[3]) b.frequency.exponentialRampToValueAtTime(f[3], t + o.dur);
+            b.Q.value = f[2] || 0.8; node.connect(b); node = b;
+        });
+        if (o.drive) { const ws = ctx.createWaveShaper(); ws.curve = distCurve(o.drive); node.connect(ws); node = ws; }
+        const g = ctx.createGain(); env(g, t, o.a || 0.004, o.v, o.dur); node.connect(g);
+        out(self, g, o.pan, o.wet);
+        src.start(t, Math.random() * 1.5); src.stop(t + o.dur + 0.1);
+        return g;
+    }
+    // oscillator voice
+    function os(self, o) {
+        const ctx = self.ctx, t = T(self, o.d);
+        const g = ctx.createGain(); env(g, t, o.a || 0.006, o.v, o.dur);
+        let last = g;
+        if (o.lp) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(o.lp, t); if (o.lp2) f.frequency.exponentialRampToValueAtTime(o.lp2, t + o.dur); f.Q.value = o.q || 0.7; g.connect(f); last = f; }
+        if (o.drive) { const ws = ctx.createWaveShaper(); ws.curve = distCurve(o.drive); last.connect(ws); last = ws; }
+        (o.fs || [o.f]).forEach((f0, i) => {
+            const osc = ctx.createOscillator(); osc.type = o.type || 'sine';
+            osc.frequency.setValueAtTime(Math.max(1, f0), t);
+            if (o.f2) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.f2 * (f0 / (o.fs ? o.fs[0] : o.f))), t + (o.bend || o.dur));
+            if (o.det) osc.detune.value = (i - ((o.fs || [0]).length - 1) / 2) * o.det;
+            if (o.am) { const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = o.am; lg.gain.value = o.amd || 0.5; lfo.connect(lg); const vg = ctx.createGain(); vg.gain.value = 1; lg.connect(vg.gain); osc.connect(vg); vg.connect(g); lfo.start(t); lfo.stop(t + o.dur + 0.1); }
+            else osc.connect(g);
+            osc.start(t); osc.stop(t + o.dur + 0.1);
+        });
+        out(self, last, o.pan, o.wet);
+        return g;
+    }
+    // FM bell (coins, achievements, chimes)
+    function bell(self, f, d, v, decay, wet) {
+        const ctx = self.ctx, t = T(self, d);
+        const car = ctx.createOscillator(), mod = ctx.createOscillator(), mg = ctx.createGain(), g = ctx.createGain();
+        car.frequency.value = f; mod.frequency.value = f * 3.5;
+        mg.gain.setValueAtTime(f * 2.2, t); mg.gain.exponentialRampToValueAtTime(f * 0.05, t + decay);
+        mod.connect(mg); mg.connect(car.frequency); car.connect(g);
+        env(g, t, 0.002, v, decay);
+        out(self, g, 0, wet || 0.25);
+        car.start(t); mod.start(t); car.stop(t + decay + 0.1); mod.stop(t + decay + 0.1);
+    }
+
+    // ---------- smoother general synth (used by the whole game) ----------
+    P.tone = function (type, f0, f1, t0, dur, vol) {
+        if (!this.ctx) return;
+        const ctx = this.ctx, now = ctx.currentTime + (t0 || 0);
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(Math.max(1, f0), now);
+        if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), now + dur);
+        const a = Math.min(0.012, dur * 0.2);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), now + a);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+        let n = o;
+        if (type === 'sawtooth' || type === 'square') { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = Math.min(9000, Math.max(f0, f1) * 5 + 500); f.Q.value = 0.4; o.connect(f); n = f; }
+        n.connect(g); g.connect(this.dest);
+        o.start(now); o.stop(now + dur + 0.05);
+    };
+
+    // ---------- redesigned DOORS sounds ----------
+    let stepSide = 1;
+    const DR = {
+        drStep(vol) {
+            if (!this.hd) return;
+            const v = vol || 0.06; stepSide = -stepSide;
+            nz(this, { f: [['bandpass', rr(330, 520), 1.3], ['lowpass', 2200]], v: v * 12, dur: 0.11, a: 0.002, pan: stepSide * 0.12, wet: 0.12 });
+            os(this, { f: rr(105, 125), f2: 52, dur: 0.09, v: v * 7, a: 0.002, pan: stepSide * 0.12 });
+            if (Math.random() < 0.18) os(this, { type: 'sawtooth', f: rr(170, 240), f2: rr(150, 210), dur: 0.16, v: v * 0.6, lp: 900, d: 0.03, am: rr(25, 40), amd: 0.8 });
+        },
+        drStomp(vol) {
+            if (!this.hd) return;
+            const v = vol || 0.4, cut = 250 + v * 2400;
+            os(this, { f: 68, f2: 30, dur: 0.45, v: v * 1.1, a: 0.003, lp: cut });
+            nz(this, { kind: 'brown', f: [['lowpass', cut]], v: v * 1.4, dur: 0.32, a: 0.002, wet: 0.3 });
+        },
+        drCreak() {
+            if (!this.hd) return;
+            const ctx = this.ctx, t = T(this), dur = rr(0.7, 1.05);
+            // latch click
+            nz(this, { f: [['highpass', 2600], ['bandpass', 3800, 2]], v: 0.18, dur: 0.025, a: 0.001 });
+            // stick-slip creak: sawtooth with a random-walk pitch, pulsed by friction, through wood resonances
+            const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+            let f = rr(78, 115); osc.frequency.setValueAtTime(f, t + 0.03);
+            for (let s = 0.03; s < dur; s += 0.035) { f = Math.max(55, Math.min(190, f + rr(-9, 11))); osc.frequency.linearRampToValueAtTime(f, t + s); }
+            const pulse = ctx.createOscillator(); pulse.type = 'square'; pulse.frequency.setValueAtTime(rr(18, 26), t); pulse.frequency.linearRampToValueAtTime(rr(30, 42), t + dur);
+            const pg = ctx.createGain(); pg.gain.value = 0.5;
+            const vca = ctx.createGain(); vca.gain.value = 0.5;
+            pulse.connect(pg); pg.connect(vca.gain); osc.connect(vca);
+            const b1 = ctx.createBiquadFilter(); b1.type = 'bandpass'; b1.frequency.value = rr(600, 900); b1.Q.value = 3.5;
+            const b2 = ctx.createBiquadFilter(); b2.type = 'bandpass'; b2.frequency.value = rr(1500, 2100); b2.Q.value = 6;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.17, t + 0.08); g.gain.setValueAtTime(0.17, t + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+            vca.connect(b1); vca.connect(b2); b1.connect(g); b2.connect(g);
+            out(this, g, rr(-0.2, 0.2), 0.35);
+            osc.start(t); pulse.start(t); osc.stop(t + dur + 0.05); pulse.stop(t + dur + 0.05);
+        },
+        drSlam() {
+            if (!this.hd) return;
+            os(this, { f: 82, f2: 34, dur: 0.6, v: 0.55, a: 0.002, lp: 500 });
+            nz(this, { kind: 'brown', f: [['lowpass', 1100]], v: 0.9, dur: 0.4, a: 0.001, wet: 0.5 });
+            nz(this, { f: [['bandpass', 2400, 1.5]], v: 0.25, dur: 0.06, a: 0.001 });
+            for (let i = 0; i < 3; i++) nz(this, { f: [['bandpass', rr(1500, 2600), 4]], v: 0.06, dur: 0.03, a: 0.001, d: 0.09 + i * rr(0.05, 0.08) });
+        },
+        drDrawer() {
+            if (!this.hd) return;
+            nz(this, { kind: 'pink', f: [['bandpass', 950, 2.5, 480]], v: 0.32, dur: 0.3, a: 0.03, wet: 0.15 });
+            os(this, { f: 190, f2: 120, dur: 0.07, v: 0.12, a: 0.004, d: 0.27 });
+            nz(this, { f: [['bandpass', 700, 2]], v: 0.07, dur: 0.05, a: 0.001, d: 0.27 });
+        },
+        drLocked() {
+            if (!this.hd) return;
+            for (let i = 0; i < 4; i++) nz(this, { f: [['bandpass', rr(1700, 2300), 3.5]], v: 0.2, dur: 0.028, a: 0.001, d: i * 0.07 });
+            os(this, { f: 140, f2: 90, dur: 0.08, v: 0.2, d: 0.02 });
+        },
+        drUnlock() {
+            if (!this.hd) return;
+            nz(this, { f: [['bandpass', 3200, 3]], v: 0.14, dur: 0.03, a: 0.002 });
+            bell(this, 2400, 0.0, 0.012, 0.18, 0.1);
+            nz(this, { f: [['bandpass', 1300, 2]], v: 0.15, dur: 0.05, a: 0.001, d: 0.14 });
+            os(this, { f: 170, f2: 110, dur: 0.07, v: 0.13, d: 0.14 });
+        },
+        drCoin() { if (!this.hd) return; bell(this, 1568, 0, 0.07, 0.45); bell(this, 2093, 0.075, 0.06, 0.6); },
+        drBuy() { if (!this.hd) return; bell(this, 880, 0, 0.06, 0.6); bell(this, 1318.5, 0.09, 0.055, 0.8); },
+        drAchv() { if (!this.hd) return; [659.3, 880, 1174.7, 1568].forEach((f, i) => bell(this, f, i * 0.09, 0.045, 1.4, 0.45)); },
+        drHeart() {
+            if (!this.hd) return;
+            os(this, { f: 60, f2: 40, dur: 0.16, v: 0.4, a: 0.004, lp: 160 });
+            nz(this, { kind: 'brown', f: [['lowpass', 260]], v: 0.25, dur: 0.06, a: 0.002 });
+            os(this, { f: 54, f2: 38, dur: 0.18, v: 0.3, a: 0.004, lp: 150, d: 0.19 });
+        },
+        drWhisper() {
+            if (!this.hd) return;
+            const n = Math.floor(rr(3, 6)); let d = 0; const side = Math.random() < 0.5 ? -1 : 1;
+            for (let i = 0; i < n; i++) {
+                const len = rr(0.12, 0.26);
+                const f1 = rr(500, 900), f2 = rr(1300, 2600);
+                nz(this, { kind: 'pink', f: [['bandpass', f1, 3, f1 * rr(0.8, 1.25)]], v: 1.5, dur: len, a: len * 0.4, d: d, pan: side * rr(0.4, 0.9), wet: 0.6 });
+                nz(this, { kind: 'pink', f: [['bandpass', f2, 4, f2 * rr(0.8, 1.2)]], v: 1.0, dur: len, a: len * 0.4, d: d, pan: side * rr(0.4, 0.9), wet: 0.6 });
+                if (Math.random() < 0.4) nz(this, { f: [['highpass', 5000]], v: 0.3, dur: 0.12, a: 0.04, d: d + len * 0.6, pan: side * 0.7, wet: 0.5 });
+                d += len + rr(0.02, 0.12);
+            }
+        },
+        drPsst() {
+            if (!this.hd) return;
+            const side = Math.random() < 0.5 ? -0.75 : 0.75;
+            nz(this, { f: [['lowpass', 900]], v: 0.4, dur: 0.025, a: 0.001, pan: side });
+            nz(this, { f: [['highpass', 4200], ['bandpass', 6800, 0.9]], v: 1.1, dur: 0.32, a: 0.12, d: 0.03, pan: side, wet: 0.35 });
+            nz(this, { f: [['highpass', 2800]], v: 0.45, dur: 0.018, a: 0.001, d: 0.36, pan: side });
+        },
+        drScream(vol) {
+            if (!this.hd) return;
+            const v = Math.min(0.5, (vol || 0.18) * 1.4);
+            os(this, { type: 'sawtooth', fs: [420, 447, 612, 905], f2: 640, bend: 0.25, det: 14, dur: 0.75, v: v * 0.55, a: 0.01, lp: 3200, drive: 6, wet: 0.45 });
+            nz(this, { f: [['bandpass', 2600, 0.8, 1200]], v: v * 1.6, dur: 0.55, a: 0.005, wet: 0.4 });
+            os(this, { f: 62, f2: 28, dur: 0.6, v: v * 1.4, a: 0.003 });
+        },
+        drRoar() {
+            if (!this.hd) return;
+            os(this, { type: 'sawtooth', fs: [66, 69.5, 101, 133], f2: 52, dur: 1.5, v: 0.13, a: 0.12, lp: 320, lp2: 900, q: 1.2, drive: 10, am: 27, amd: 0.6, wet: 0.5 });
+            nz(this, { kind: 'brown', f: [['bandpass', 420, 1.4, 260]], v: 0.42, dur: 1.4, a: 0.15, drive: 4, wet: 0.5 });
+            os(this, { f: 44, f2: 30, dur: 1.2, v: 0.35, a: 0.1 });
+        },
+        drWhoosh(dur, vol) {
+            if (!this.hd) return;
+            const v = vol || 0.5, d = dur || 0.3;
+            nz(this, { kind: 'brown', f: [['lowpass', 220 + v * 2600], ['highpass', 30]], v: v * 1.25, dur: d * 1.4, a: d * 0.3, drive: 2.5, wet: 0.35 });
+            nz(this, { kind: 'pink', f: [['bandpass', 500 + v * 900, 0.8]], v: v * 0.35, dur: d * 1.2, a: d * 0.3 });
+            if (Math.random() < 0.5) os(this, { type: 'sawtooth', f: rr(42, 58), dur: d * 1.3, v: v * 0.12, lp: 200, a: d * 0.3 });
+        },
+        drAmbush(dur) {
+            if (!this.hd) return;
+            const d = dur || 0.3;
+            nz(this, { kind: 'brown', f: [['lowpass', 1400]], v: 0.55, dur: d * 1.3, a: d * 0.25, drive: 3, wet: 0.35 });
+            os(this, { type: 'sawtooth', fs: [148, 231, 312], f2: 260, det: 25, dur: d, v: 0.06, lp: 1800, drive: 8, a: d * 0.2 });
+            nz(this, { f: [['bandpass', 1800, 4, 900]], v: 0.18, dur: d, a: d * 0.2 });
+        },
+        drBuzz() {
+            if (!this.hd) return;
+            os(this, { type: 'square', fs: [100, 150, 200], dur: 0.38, v: 0.05, lp: 1400, q: 2, a: 0.004 });
+            for (let i = 0; i < 6; i++) nz(this, { f: [['highpass', 3000]], v: 0.07, dur: 0.02, a: 0.001, d: rr(0, 0.32) });
+        }
+    };
+    // keep the old versions as a fallback before the HD chain exists
+    Object.keys(DR).forEach((k) => {
+        const old = P[k], hd = DR[k];
+        P[k] = function () { if (this.hd) { try { return hd.apply(this, arguments); } catch (e) { /* fall back */ } } if (old) return old.apply(this, arguments); };
+    });
+
+    // ---------- hotel room tone (only while playing DOORS) ----------
+    function roomTone(self) {
+        const ctx = self.ctx;
+        const mk = (buf) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; return s; };
+        const low = mk(self.nB), air = mk(self.nP);
+        const lf = ctx.createBiquadFilter(); lf.type = 'lowpass'; lf.frequency.value = 150; lf.Q.value = 0.6;
+        const af = ctx.createBiquadFilter(); af.type = 'highpass'; af.frequency.value = 2800;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.06; const lg = ctx.createGain(); lg.gain.value = 60; lfo.connect(lg); lg.connect(lf.frequency);
+        self.toneG = ctx.createGain(); self.toneG.gain.value = 0;
+        const ag = ctx.createGain(); ag.gain.value = 0.12;
+        low.connect(lf); lf.connect(self.toneG);
+        air.connect(af); af.connect(ag); ag.connect(self.toneG);
+        self.toneG.connect(self.master);
+        low.start(); air.start(); lfo.start();
+    }
+    setInterval(() => {
+        try {
+            const s = (typeof sound !== 'undefined') ? sound : null;
+            if (!s || !s.hd || !s.ctx) return;
+            const t = s.ctx.currentTime, doors = !!window.doorsActive;
+            const st = window.__doorsState;
+            const on = doors && st && st.running && !st.dead;
+            s.toneG.gain.setTargetAtTime(on ? (st.paused ? 0.012 : 0.05) : 0, t, 0.6);
+            s.verbSend.gain.setTargetAtTime(doors ? 0.3 : 0.1, t, 0.3);
+        } catch (e) { /* ignore */ }
+    }, 400);
+})();
     </script>
     <script id="prefabs">
 (function () {
@@ -12606,9 +13205,9 @@
         const q = gfxQ();
         if (q === 'low') return [0.5, Math.min(dpr(), 0.8)];
         if (q === 'medium') return [0.6, Math.min(dpr(), 1.25)];
-        return [0.75, Math.min(dpr(), 2)];
+        return [0.7, Math.min(dpr(), window.__hiMat ? 1.5 : 2)];
     }
-    let curPR = 0, gAcc = 0, gN = 0, gWorst = 0;
+    let curPR = 0, gAcc = 0, gN = 0, gWorst = 0, gSlow = 0, gDown = false;
     function gfxApply(reset) {
         if (typeof renderer === 'undefined' || !renderer) return;
         const r = prRange();
@@ -12627,6 +13226,18 @@
         else if (fps < 45) np = curPR - 0.08;
         else if (fps > 57 && curPR < r[1]) np = curPR + 0.04;
         np = clamp(Math.round(np * 100) / 100, r[0], r[1]);
+        // AUTO quality: still slow at the lowest resolution -> use MEDIUM from now on
+        const playing = window.doorsActive || (typeof gameActive !== 'undefined' && gameActive);
+        if (playing && settings.quality === 'auto' && window.__hiMat && fps < 26 && curPR <= r[0] + 0.01) {
+            gSlow = (gSlow || 0) + 1;
+            if (gSlow >= 3 && !gDown) {
+                gDown = true; settings.quality = 'medium'; saveSettings();
+                const tt = document.createElement('div');
+                tt.style.cssText = 'position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;padding:9px 16px;border-radius:6px;background:rgba(10,8,6,.9);border:1px solid rgba(239,228,204,.25);color:#efe4cc;font:600 13px Inter,sans-serif;pointer-events:none';
+                tt.textContent = 'Your computer is struggling, so graphics will use MEDIUM next time you open the game (change it in Options).';
+                document.body.appendChild(tt); setTimeout(() => tt.remove(), 7000);
+            }
+        } else gSlow = 0;
         if (Math.abs(np - curPR) > 0.005) { curPR = np; try { renderer.setPixelRatio(curPR); renderer.setSize(window.innerWidth, window.innerHeight); } catch (e) { /* ignore */ } }
         gAcc = 0; gN = 0; gWorst = 0;
     }
@@ -14199,5 +14810,91 @@ window.__doorsCfgLoaded = true;   // (leave this line alone: it tells the game t
     window.__mpDebug = { M: M, PID: PID, prof: prof, connect: connect, createLobby: createLobby, joinLobby: joinLobby, startRunHost: startRunHost, hostBackToLobby: hostBackToLobby, leaveLobby: leaveLobby };
 })();
     </script>
+    <style id="hd-ui">
+    /* ================= HD UI: cinematic menu + HUD (overrides the older cartoony styles) ================= */
+    :root { --bone: #efe4cc; --bone2: rgba(239,228,204,.62); --glass: rgba(10,8,7,.58); --line: rgba(239,228,204,.14); --accent: #d9a441; --blood: #b3261e; }
+    /* ---- main menu ---- */
+    #menu-floaters { display: none !important; }
+    #start-screen { background: radial-gradient(ellipse at center, rgba(0,0,0,.35) 0%, rgba(0,0,0,.82) 75%) !important; backdrop-filter: blur(5px) saturate(.75) !important; }
+    #start-screen, #start-screen * { font-family: 'Inter', system-ui, sans-serif !important; }
+    #start-screen .menu-card { background: linear-gradient(180deg, rgba(18,14,11,.88), rgba(8,6,5,.92)) !important; border: 1px solid var(--line) !important; border-radius: 14px !important; box-shadow: 0 30px 80px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.04) !important; }
+    #start-screen .glitch-title { font-family: 'Cinzel', Georgia, serif !important; font-weight: 900 !important; letter-spacing: .14em !important; color: var(--bone) !important; text-shadow: 0 0 30px rgba(217,164,65,.25), 0 2px 0 #000 !important; animation: none !important; font-size: clamp(30px, 5.4vw, 58px) !important; }
+    #start-screen .glitch-title span { color: var(--accent) !important; font-size: inherit !important; letter-spacing: inherit !important; font-weight: inherit !important; }
+    #start-screen .glitch-title::before, #start-screen .glitch-title::after { display: none !important; }
+    #start-screen .tagline { color: var(--bone2) !important; font-weight: 400 !important; font-style: italic; letter-spacing: .04em; font-family: 'EB Garamond', Georgia, serif !important; font-size: 15px !important; }
+    #start-screen .text-center > span:first-child { background: transparent !important; border: 1px solid var(--line) !important; color: var(--bone2) !important; font-weight: 600 !important; letter-spacing: .3em !important; font-size: 10px !important; }
+    #start-screen [class*="bg-black/60"] { background: rgba(255,255,255,.025) !important; border: 1px solid var(--line) !important; border-radius: 10px !important; }
+    #start-screen [class*="text-amber-400"], #start-screen [class*="text-cyan-300"], #start-screen [class*="text-lime-300"] { color: var(--accent) !important; letter-spacing: .22em !important; font-weight: 700 !important; font-size: 10.5px !important; }
+    #start-screen [class*="text-yellow-200"], #start-screen [class*="text-amber-200"], #start-screen [class*="text-amber-100"], #start-screen #level-desc, #start-screen #diff-desc { color: var(--bone2) !important; font-weight: 400 !important; }
+    #start-screen button:not(.swatch) { background: rgba(255,255,255,.03) !important; color: var(--bone) !important; border: 1px solid var(--line) !important; border-radius: 8px !important; box-shadow: none !important; font-weight: 600 !important; letter-spacing: .06em !important; transition: background .15s, border-color .15s, transform .1s !important; text-shadow: none !important; }
+    #start-screen button:not(.swatch):hover { background: rgba(255,255,255,.08) !important; border-color: rgba(239,228,204,.4) !important; }
+    #start-screen button:active { transform: translateY(1px); }
+    #start-screen button.border-white, #start-screen button[class*="border-emerald-200"], #start-screen button[class*="border-orange-200"], #start-screen button[class*="border-red-200"] { background: rgba(217,164,65,.16) !important; border-color: var(--accent) !important; color: #fff !important; box-shadow: inset 0 0 0 1px rgba(217,164,65,.35), 0 0 18px rgba(217,164,65,.12) !important; }
+    #start-screen #start-btn { background: linear-gradient(180deg, #c8902f, #8a5a17) !important; color: #120c06 !important; border: 1px solid #e8bf6a !important; font-weight: 800 !important; letter-spacing: .18em !important; box-shadow: 0 10px 30px rgba(200,144,47,.25) !important; }
+    #start-screen #start-btn:hover { filter: brightness(1.08); }
+    #start-screen input[type=range] { accent-color: var(--accent); }
+    /* ---- main-game HUD fonts ---- */
+    #hud, #hud *, #pause-screen, #pause-screen *, #end-screen, #end-screen * { font-family: 'Inter', system-ui, sans-serif !important; }
+    #hud [class*="bg-black/"], #pa-ticker > div, #pa-ticker > p { background: rgba(10,8,7,.62) !important; border: 1px solid var(--line) !important; border-radius: 10px !important; box-shadow: 0 10px 30px rgba(0,0,0,.45) !important; backdrop-filter: blur(6px); }
+    #hud [class*="text-yellow-400"], #hud [class*="text-amber-400"] { color: var(--accent) !important; letter-spacing: .2em !important; font-size: 10px !important; }
+    /* ---- DOORS HUD ---- */
+    #dr-root { font-family: 'Inter', system-ui, sans-serif !important; color: var(--bone) !important; }
+    #dr-room { top: 22px !important; left: 26px !important; }
+    #dr-room .n { font-family: 'Cinzel', Georgia, serif !important; font-size: 21px !important; font-weight: 500 !important; letter-spacing: .32em !important; color: var(--bone) !important; text-shadow: 0 2px 10px rgba(0,0,0,.9) !important; }
+    #dr-room .t { font-size: 10px !important; letter-spacing: .35em !important; opacity: .5 !important; margin-top: 2px; }
+    #pl-prog { top: 74px !important; left: 26px !important; width: 140px !important; opacity: .55; }
+    #pl-prog .lbl { font-size: 9px !important; letter-spacing: .25em !important; }
+    #pl-timer { top: 20px !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: .2em !important; opacity: .5; color: var(--bone) !important; }
+    #pl-mods { top: 40px !important; font-size: 13px !important; opacity: .6 !important; }
+    .dr-bar { border: none !important; background: rgba(255,255,255,.09) !important; height: 3px !important; border-radius: 2px !important; }
+    #dr-hp { top: 24px !important; right: 26px !important; width: 170px !important; }
+    #dr-hp > div:first-child { font-size: 9px !important; letter-spacing: .32em !important; opacity: .55; }
+    #dr-hpbar { box-shadow: 0 0 10px currentColor; }
+    #dr-gold { top: 50px !important; right: 26px !important; font-size: 12px !important; font-weight: 600 !important; color: var(--bone) !important; opacity: .8; }
+    #pl-batt { top: 70px !important; right: 26px !important; font-size: 11px !important; }
+    #dr-cross { width: 4px !important; height: 4px !important; margin: -2px 0 0 -2px !important; background: rgba(255,248,230,.55) !important; box-shadow: 0 0 4px rgba(0,0,0,.8) !important; }
+    #dr-hotbar { bottom: 22px !important; gap: 5px !important; }
+    .dr-slot { width: 48px !important; height: 48px !important; border-radius: 6px !important; border: 1px solid var(--line) !important; background: rgba(8,6,5,.5) !important; backdrop-filter: blur(4px); font-size: 21px !important; transition: border-color .15s, transform .15s; }
+    .dr-slot.sel { border-color: rgba(239,228,204,.8) !important; box-shadow: 0 0 14px rgba(239,200,140,.18), inset 0 0 12px rgba(239,200,140,.08) !important; transform: translateY(-3px); }
+    .dr-slot .k { font-size: 9px !important; opacity: .45 !important; top: 2px !important; left: 5px !important; }
+    .dr-slot .nm { display: none !important; }
+    .dr-slot.sel .nm { display: block !important; position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 9px !important; letter-spacing: .2em; text-transform: uppercase; opacity: .7; }
+    .dr-slot .c { font-size: 10px !important; font-weight: 700; }
+    #dr-sub { font-family: 'EB Garamond', Georgia, serif !important; font-size: 20px !important; font-style: italic !important; color: #f4ead6 !important; text-shadow: 0 2px 6px #000, 0 0 24px rgba(0,0,0,.9) !important; background: none !important; border: none !important; box-shadow: none !important; bottom: 104px !important; letter-spacing: .01em; }
+    #dr-prompt { font-size: 13px !important; font-weight: 500 !important; background: rgba(8,6,5,.6) !important; border: 1px solid var(--line) !important; border-radius: 4px !important; color: var(--bone) !important; padding: 6px 12px !important; letter-spacing: .03em; }
+    #dr-prompt .key { font-family: 'Inter', sans-serif !important; background: var(--bone) !important; color: #120c06 !important; border-radius: 3px !important; padding: 0 6px !important; margin-right: 8px !important; font-weight: 800 !important; box-shadow: none !important; border: none !important; }
+    #dr-achv { top: 22px !important; left: auto !important; right: 220px !important; transform: none !important; min-width: 0 !important; padding: 8px 14px !important; border: 1px solid rgba(217,164,65,.5) !important; border-radius: 6px !important; background: rgba(10,8,6,.85) !important; text-align: left !important; }
+    #dr-achv .h { font-size: 9px !important; letter-spacing: .3em !important; color: var(--accent) !important; }
+    #dr-achv .b { font-family: 'Cinzel', serif !important; font-size: 14px !important; color: var(--bone) !important; }
+    #dr-objective { top: 112px !important; left: 26px !important; font-size: 12px !important; font-weight: 600 !important; letter-spacing: .06em; color: var(--bone) !important; }
+    #dr-code { font-family: 'Cinzel', serif !important; font-size: 15px !important; color: var(--bone) !important; }
+    #dr-noise { font-size: 11px !important; }
+    #dr-halt { font-family: 'Cinzel', serif !important; letter-spacing: .4em !important; }
+    #dr-danger { font-size: 12px !important; letter-spacing: .2em !important; }
+    body.hdfx #pl-vig { display: none !important; }
+    /* cards / menus inside DOORS */
+    .dr-card { background: linear-gradient(180deg, rgba(20,15,12,.94), rgba(9,7,6,.96)) !important; border: 1px solid var(--line) !important; border-radius: 12px !important; box-shadow: 0 30px 90px rgba(0,0,0,.85) !important; color: var(--bone) !important; }
+    .dr-card h2 { font-family: 'Cinzel', Georgia, serif !important; font-weight: 700 !important; letter-spacing: .2em !important; color: var(--bone) !important; font-size: 30px !important; }
+    .dr-card p { color: var(--bone2) !important; }
+    .dr-btn { background: rgba(255,255,255,.04) !important; border: 1px solid rgba(239,228,204,.32) !important; border-radius: 6px !important; color: var(--bone) !important; font-family: 'Inter', sans-serif !important; font-weight: 700 !important; letter-spacing: .14em !important; font-size: 12px !important; text-transform: uppercase; padding: 11px 18px !important; transition: background .15s, border-color .15s !important; }
+    .dr-btn:hover { background: rgba(217,164,65,.18) !important; border-color: var(--accent) !important; }
+    #dr-go { background: linear-gradient(180deg, #c8902f, #8a5a17) !important; color: #120c06 !important; border-color: #e8bf6a !important; }
+    #dr-intro .tip { background: rgba(255,255,255,.03) !important; border: 1px solid var(--line) !important; border-radius: 6px !important; color: var(--bone2) !important; font-size: 12px !important; }
+    #dr-intro .tip b { color: var(--bone) !important; }
+    .dr-card input, #mp-panel input, #mp-panel textarea { font-family: 'Inter', sans-serif !important; }
+    #mp-panel { background: linear-gradient(180deg, rgba(18,14,11,.95), rgba(8,6,5,.96)) !important; border: 1px solid var(--line) !important; border-radius: 12px !important; font-family: 'Inter', sans-serif !important; color: var(--bone) !important; }
+    #mp-panel h2 { font-family: 'Cinzel', serif !important; font-weight: 700 !important; letter-spacing: .14em !important; color: var(--bone) !important; font-size: 22px !important; }
+    #mp-panel h3 { color: var(--accent) !important; letter-spacing: .25em !important; font-size: 10px !important; }
+    #mp-panel .mp-b { border-radius: 6px !important; border: 1px solid rgba(239,228,204,.3) !important; background: rgba(255,255,255,.05) !important; letter-spacing: .1em; font-size: 12px !important; }
+    #mp-panel .mp-b.green { background: rgba(74,222,128,.14) !important; border-color: rgba(74,222,128,.6) !important; }
+    #mp-panel .mp-b.blue { background: rgba(147,197,253,.12) !important; border-color: rgba(147,197,253,.55) !important; }
+    #mp-panel .mp-b:hover { background: rgba(217,164,65,.2) !important; }
+    #mp-code { font-family: 'Cinzel', serif !important; color: var(--bone) !important; text-shadow: 0 0 18px rgba(217,164,65,.4) !important; }
+    #mp-list .r { background: rgba(8,6,5,.5) !important; border: 1px solid var(--line) !important; border-radius: 6px !important; }
+    #mp-feed div, #mp-chatlog div { background: rgba(8,6,5,.65) !important; border-radius: 4px !important; }
+    #dr-end .dr-card h2, #mp-end h2 { font-size: 34px !important; }
+    #dr-cine .ttl .m { font-family: 'Cinzel', serif !important; letter-spacing: .3em !important; }
+    #dr-cine .ttl .s { font-family: 'Inter', sans-serif !important; letter-spacing: .4em !important; }
+    </style>
 </body>
 </html>

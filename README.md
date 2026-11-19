@@ -147,6 +147,28 @@ On the multiplayer screen, **🧪 LOCAL TEST** connects tabs **in the same brows
 
 ---
 
+## 🎨 Graphics & sound
+
+### Graphics settings (Options → GRAPHICS)
+| Setting | What you get |
+| --- | --- |
+| **HIGH** | Per-pixel lighting (real pools of light from every lamp), surfaces that catch the light, bloom, a filmic color grade, vignette, film grain and smooth edges |
+| **MEDIUM** | The cheaper lighting, but still the color grade, vignette, grain and smooth edges |
+| **LOW** | The original look, for weak computers |
+| **AUTO** (default) | HIGH on computers, LOW on phones and consoles. If the game keeps running slowly it switches to MEDIUM for next time and tells you. |
+
+Changing between LOW/MEDIUM and HIGH takes effect the next time you open the game.
+
+### What changed
+- **Lighting:** lamps light up the floor and walls around them, corners stay dark, furniture has soft shadows underneath, and ceiling lamps cast faint light cones.
+- **Post-processing:** lights glow (bloom), the colors are less "cartoon orange", and there's a vignette and subtle film grain. When you die, the colors drain out.
+- **First-person arms:** a dark jacket sleeve and a real hand with fingers that wrap around what you're holding, instead of the old blocky toy arm.
+- **UI:** a new menu and DOORS HUD with cleaner fonts, slim health bar, glass hotbar and movie-style subtitles.
+- **Sound:**
+  - Everything goes through a mixer (compressor + limiter) and a reverb, so sounds feel like they're in a real place.
+  - Every DOORS sound was redone: wooden footsteps, creaky doors with a latch click, slams, drawers, lock rattles, key clicks, bell-like coins, a deep heartbeat, whispers that move between your ears, Screech's "psst", layered jumpscare screams, a growling roar, Rush's rumbling wall of noise, and electrical buzzing.
+  - DOORS also has a quiet "hotel room tone" in the background.
+
 ## 🆕 Other new DOORS stuff
 
 ### Better room generation
